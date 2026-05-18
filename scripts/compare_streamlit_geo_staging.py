@@ -11,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from geo_matching import StreamlitGeoMatcher, compare_geo_coverage
+from geo_matching import MERCHANT_LOCATION_ALIAS_FILENAME, StreamlitGeoMatcher, compare_geo_coverage
 
 
 DEFAULT_DATA_ROOT = Path(r"D:\Tencent\Data analysis\anzdata-worktree\projects\anz-bi-platform")
@@ -28,7 +28,7 @@ def main() -> int:
 
     data_root = Path(args.data_root).expanduser()
     staging_dir = Path(args.staging_geo_dir).expanduser()
-    matcher = StreamlitGeoMatcher(staging_dir)
+    matcher = StreamlitGeoMatcher(staging_dir, merchant_aliases=_load_merchant_aliases(data_root, staging_dir))
 
     new_intake = _load_rows(data_root / "processed" / "new_intake" / "new_intake_rows.csv", args.sample)
     activation = _load_rows(
@@ -47,7 +47,8 @@ def main() -> int:
         output_path = Path(args.output_json).expanduser()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(payload, encoding="utf-8")
-    print(payload)
+    sys.stdout.buffer.write(payload.encode("utf-8"))
+    sys.stdout.buffer.write(b"\n")
     return 0
 
 
@@ -58,6 +59,15 @@ def _load_rows(path: Path, sample: int) -> pd.DataFrame:
     return df
 
 
+def _load_merchant_aliases(data_root: Path, staging_dir: Path) -> pd.DataFrame:
+    staging_path = staging_dir / MERCHANT_LOCATION_ALIAS_FILENAME
+    if staging_path.exists():
+        return pd.read_csv(staging_path, dtype=str).fillna("")
+    data_repo_path = data_root.parent / "anz-geography" / "processed" / MERCHANT_LOCATION_ALIAS_FILENAME
+    if data_repo_path.exists():
+        return pd.read_csv(data_repo_path, dtype=str).fillna("")
+    return pd.DataFrame()
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
-

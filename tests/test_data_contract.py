@@ -758,6 +758,169 @@ def test_geo_matcher_can_use_private_repo_frames() -> None:
     assert staged.loc[0, "staging_business_cluster"] == "CBD"
 
 
+def test_geo_matcher_prefers_reviewed_branch_alias_over_hq_address() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "analysis_country": "NZ",
+                "merchant_id": "riccarton",
+                "merchant_short_name": "Overland MP Riccarton",
+                "store_address": "c/- 18-20 Eden St, Newmarket, Auckland 1023",
+                "business_city": "Auckland",
+                "business_suburb": "Newmarket",
+                "geo_area": "Central Auckland",
+            },
+            {
+                "analysis_country": "NZ",
+                "merchant_id": "albany",
+                "merchant_short_name": "Overland MP Albany",
+                "store_address": "c/- 18-20 Eden St, Newmarket, Auckland 1023",
+            },
+            {
+                "analysis_country": "NZ",
+                "merchant_id": "newmarket",
+                "merchant_short_name": "Overland MP Newmarket",
+                "store_address": "c/- 18-20 Eden St, Newmarket, Auckland 1023",
+            },
+            {
+                "analysis_country": "NZ",
+                "merchant_id": "roverland",
+                "merchant_short_name": "ARCHIBALD & SHORTER ROVERLAND LIMITED",
+                "store_address": "c/- 18-20 Eden St, Newmarket, Auckland 1023",
+            },
+        ]
+    )
+    matcher = StreamlitGeoMatcher.from_frames(
+        nz=pd.DataFrame(
+            [
+                {
+                    "Country": "NZ",
+                    "City": "Auckland",
+                    "Suburb": "Newmarket",
+                    "Postcode": "1023",
+                    "geo_area": "Central Auckland",
+                    "business_cluster": "Student",
+                },
+                {
+                    "Country": "NZ",
+                    "City": "Christchurch",
+                    "Suburb": "Riccarton",
+                    "Postcode": "8041",
+                    "geo_area": "West / Student",
+                    "business_cluster": "Student",
+                },
+                {
+                    "Country": "NZ",
+                    "City": "Auckland",
+                    "Suburb": "Albany",
+                    "Postcode": "0632",
+                    "geo_area": "North Shore",
+                    "business_cluster": "Chinese",
+                },
+            ]
+        ),
+        au=pd.DataFrame([{"Country": "AU", "State": "NSW", "City": "Sydney", "Suburb": "Haymarket", "Postcode": "2000"}]),
+        merchant_aliases=pd.DataFrame(
+            [
+                {
+                    "Country": "NZ",
+                    "alias": "Riccarton",
+                    "brand_pattern": "overland",
+                    "City": "Christchurch",
+                    "Suburb": "Riccarton",
+                    "Postcode": "8041",
+                    "geo_area": "West / Student",
+                    "business_cluster": "Student",
+                    "confidence": "high",
+                    "priority": "10",
+                },
+                {
+                    "Country": "NZ",
+                    "alias": "Albany",
+                    "brand_pattern": "overland",
+                    "City": "Auckland",
+                    "Suburb": "Albany",
+                    "Postcode": "0632",
+                    "geo_area": "North Shore",
+                    "business_cluster": "Chinese",
+                    "confidence": "high",
+                    "priority": "10",
+                },
+                {
+                    "Country": "NZ",
+                    "alias": "Newmarket",
+                    "brand_pattern": "overland",
+                    "City": "Auckland",
+                    "Suburb": "Newmarket",
+                    "Postcode": "1023",
+                    "geo_area": "Central Auckland",
+                    "business_cluster": "Student",
+                    "confidence": "high",
+                    "priority": "10",
+                },
+            ]
+        ),
+    )
+
+    staged = append_staging_geo_columns(rows, matcher)
+
+    assert staged.loc[0, "staging_city"] == "Christchurch"
+    assert staged.loc[0, "staging_suburb"] == "Riccarton"
+    assert staged.loc[0, "staging_geo_area"] == "West / Student"
+    assert staged.loc[0, "staging_geo_source"] == "merchant_short_name_branch_alias"
+    assert staged.loc[1, "staging_suburb"] == "Albany"
+    assert staged.loc[2, "staging_suburb"] == "Newmarket"
+    assert staged.loc[3, "staging_suburb"] == "Newmarket"
+    assert staged.loc[3, "staging_geo_source"] == "nz_postcode_lookup"
+
+
+def test_geo_matcher_uses_au_branch_alias_when_address_points_elsewhere() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "scope_country": "AU",
+                "merchant_id": "chatswood",
+                "merchant_short_name": "CBD CHATSWOOD PTY LT",
+                "address": "Level 1 50 Market Street Melbourne VIC 3000",
+                "postcode": "3000",
+                "business_city": "Melbourne",
+            }
+        ]
+    )
+    matcher = StreamlitGeoMatcher.from_frames(
+        nz=pd.DataFrame([{"Country": "NZ", "City": "Auckland", "Suburb": "Newmarket", "Postcode": "1023"}]),
+        au=pd.DataFrame(
+            [
+                {"Country": "AU", "State": "VIC", "City": "Melbourne", "Suburb": "MELBOURNE", "Postcode": "3000"},
+                {"Country": "AU", "State": "NSW", "City": "Sydney", "Suburb": "CHATSWOOD", "Postcode": "2067"},
+            ]
+        ),
+        merchant_aliases=pd.DataFrame(
+            [
+                {
+                    "Country": "AU",
+                    "alias": "Chatswood",
+                    "brand_pattern": "",
+                    "State": "NSW",
+                    "City": "Sydney",
+                    "Suburb": "CHATSWOOD",
+                    "Postcode": "2067",
+                    "confidence": "high",
+                    "priority": "10",
+                }
+            ]
+        ),
+    )
+
+    staged = append_staging_geo_columns(rows, matcher)
+
+    assert staged.loc[0, "staging_state"] == "NSW"
+    assert staged.loc[0, "staging_city"] == "Sydney"
+    assert staged.loc[0, "staging_suburb"] == "CHATSWOOD"
+    assert staged.loc[0, "staging_postcode"] == "2067"
+    assert staged.loc[0, "staging_geo_source"] == "merchant_short_name_branch_alias"
+
+
 def test_echarts_option_builders_return_core_shapes() -> None:
     trend = pd.DataFrame([{"month": "2026.03", "count": 10, "rate": 0.4}])
     combo = combo_line_bar_option(

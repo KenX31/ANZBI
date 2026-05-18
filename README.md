@@ -284,11 +284,16 @@ projects/anz-geography/
     nz_geo_area_rules.csv
     au_geo_dimension.csv
     au_geo_match_rules.csv
+    geo_merchant_location_aliases.csv
 ```
 
 The app reads BI page rows from `DATA_PROJECT` and the reviewed geo dimensions from
 `DATA_GEO_PROJECT`. If the BI page rows do not include `staging_*` columns, the app
 loads `projects/anz-geography/processed/*.csv` and applies the matcher at runtime.
+`geo_merchant_location_aliases.csv` is a reviewed correction layer for chain-store
+or multi-branch merchants whose registered address points to a headquarters or
+payment-institution address while the branch location is encoded in
+`merchant_short_name`.
 
 The KA / SMB sidebar filter reads the shared KA merchant MID dimension from
 `DATA_KA_PROJECT`, defaulting to `projects/anz-ka-dimension/processed/dim_ka_merchant_anz.csv`.

@@ -12,7 +12,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
+from geo_matching import MERCHANT_LOCATION_ALIAS_FILENAME, StreamlitGeoMatcher, append_staging_geo_columns
 
 
 PROJECT_ID = "anz-bi-platform"
@@ -220,7 +220,10 @@ def _local_geo_matcher(source: DataSource) -> StreamlitGeoMatcher | None:
     required = ("nz_geo_dimension.csv", "au_geo_dimension.csv")
     if not all((source.geo_staging_root / name).exists() for name in required):
         return None
-    return StreamlitGeoMatcher(source.geo_staging_root)
+    return StreamlitGeoMatcher(
+        source.geo_staging_root,
+        merchant_aliases=_load_local_geo_aliases(source),
+    )
 
 
 def _github_geo_matcher(source: DataSource) -> StreamlitGeoMatcher | None:
@@ -233,6 +236,19 @@ def _github_geo_matcher(source: DataSource) -> StreamlitGeoMatcher | None:
         au=au,
         nz_rules=_load_geo_frame_optional(source, f"{REMOTE_GEO_ROOT}/nz_geo_area_rules.csv"),
         au_rules=_load_geo_frame_optional(source, f"{REMOTE_GEO_ROOT}/au_geo_match_rules.csv"),
+        merchant_aliases=_load_geo_frame_optional(source, f"{REMOTE_GEO_ROOT}/{MERCHANT_LOCATION_ALIAS_FILENAME}"),
+    )
+
+
+def _load_local_geo_aliases(source: DataSource) -> pd.DataFrame:
+    if source.geo_staging_root is not None:
+        staging_path = source.geo_staging_root / MERCHANT_LOCATION_ALIAS_FILENAME
+        if staging_path.exists():
+            return _read_csv_path(staging_path)
+    return _load_project_frame_optional(
+        source,
+        source.github_geo_project,
+        f"{REMOTE_GEO_ROOT}/{MERCHANT_LOCATION_ALIAS_FILENAME}",
     )
 
 
