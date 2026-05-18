@@ -61,6 +61,7 @@ DATA_BACKEND = "github_private"
 DATA_GITHUB_REPO = "KenX31/anzdata"
 DATA_GITHUB_REF = "main"
 DATA_PROJECT = "anz-bi-platform"
+DATA_GEO_PROJECT = "anz-geography"
 DATA_GITHUB_TOKEN = "..."
 ```
 
@@ -79,6 +80,23 @@ python scripts\build_private_data_project.py `
 
 The script copies only reviewed processed outputs from the local analysis workspace and
 writes a manifest with schema versions, row counts, source periods, and privacy levels.
+
+The `anz-bi-platform` data project is page-scoped:
+
+```text
+projects/anz-bi-platform/
+  manifest.json
+  processed/
+    new_intake/
+    activation_low_activity/
+    shared_dimensions/
+```
+
+Each page owns its own `processed/<page_id>/` folder and `manifest.page_datasets`
+entry. Future refreshes should update only the changed page folder plus the manifest
+entry for that page, leaving unrelated BI pages untouched. Shared dimensions under
+`processed/shared_dimensions/` should be small contracts used by the BI app itself;
+reusable geo dimensions stay in the separate `anz-geography` project.
 
 ## Country-Aware Geography Contract
 
@@ -133,26 +151,28 @@ This lets localhost reflect the reviewed staging geography before the private da
 repo is rebuilt. Deployment should still use reviewed processed files from
 `KenX31/anzdata`.
 
-For deployment, the reviewed geo dimensions should be stored in the private data
-repo under the ANZ BI project, for example:
+For deployment, the reviewed geo dimensions are intentionally stored as a separate
+private data project so other BI pages can reuse the same geo layer:
 
 ```text
 KenX31/anzdata
 projects/anz-bi-platform/
-  processed/shared_dimensions/
-    geo_reporting_bridge.csv
-    geo_warehouse_streamlit_staging/
-      nz_geo_dimension.csv
-      nz_geo_area_rules.csv
-      au_geo_dimension.csv
-      au_geo_match_rules.csv
+  manifest.json
+  processed/new_intake/
+  processed/activation_low_activity/
+  processed/shared_dimensions/geo_reporting_bridge.csv
+projects/anz-geography/
+  manifest.json
+  processed/
+    nz_geo_dimension.csv
+    nz_geo_area_rules.csv
+    au_geo_dimension.csv
+    au_geo_match_rules.csv
 ```
 
-The app reads prepared page rows from `KenX31/anzdata`; those rows should include
-the reviewed `staging_*` geography columns after the private data package is rebuilt.
-If the deployed rows do not yet include `staging_*` columns, `DATA_BACKEND=github_private`
-will try to load the reviewed geo dimension CSVs from `processed/shared_dimensions`
-and apply the same matcher at runtime.
+The app reads BI page rows from `DATA_PROJECT` and the reviewed geo dimensions from
+`DATA_GEO_PROJECT`. If the BI page rows do not include `staging_*` columns, the app
+loads `projects/anz-geography/processed/*.csv` and applies the matcher at runtime.
 
 ## Streamlit Geo Staging Check
 

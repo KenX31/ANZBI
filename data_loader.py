@@ -16,12 +16,12 @@ from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
 
 
 PROJECT_ID = "anz-bi-platform"
+GEO_PROJECT_ID = "anz-geography"
 DEFAULT_LOCAL_PROJECT_ROOT = Path(r"D:\Tencent\Data analysis\anzdata-worktree\projects\anz-bi-platform")
 DEFAULT_LOCAL_GEO_STAGING_ROOT = Path(
     r"D:\Tencent\Data analysis\ANZ_Data_Warehouse\data\Geo_warehouse_streamlit_staging"
 )
-REMOTE_GEO_STAGING_ROOT = "processed/shared_dimensions/geo_warehouse_streamlit_staging"
-REMOTE_GEO_FALLBACK_ROOT = "processed/shared_dimensions"
+REMOTE_GEO_ROOT = "processed"
 EXPECTED_SCHEMA = {
     "new_intake": "1.0",
     "activation_low_activity": "1.0",
@@ -41,6 +41,7 @@ class DataSource:
     github_repo: str = "KenX31/anzdata"
     github_ref: str = "main"
     github_project: str = PROJECT_ID
+    github_geo_project: str = GEO_PROJECT_ID
     github_token: str = ""
 
 
@@ -71,6 +72,7 @@ def resolve_data_source() -> DataSource:
         github_repo=_secret_or_env("DATA_GITHUB_REPO", "KenX31/anzdata"),
         github_ref=_secret_or_env("DATA_GITHUB_REF", "main"),
         github_project=_secret_or_env("DATA_PROJECT", PROJECT_ID),
+        github_geo_project=_secret_or_env("DATA_GEO_PROJECT", GEO_PROJECT_ID),
         github_token=_secret_or_env("DATA_GITHUB_TOKEN", ""),
     )
 
@@ -183,18 +185,16 @@ def _local_geo_matcher(source: DataSource) -> StreamlitGeoMatcher | None:
 
 
 def _github_geo_matcher(source: DataSource) -> StreamlitGeoMatcher | None:
-    for root in (REMOTE_GEO_STAGING_ROOT, REMOTE_GEO_FALLBACK_ROOT):
-        nz = _load_frame_optional(source, f"{root}/nz_geo_dimension.csv")
-        au = _load_frame_optional(source, f"{root}/au_geo_dimension.csv")
-        if nz.empty or au.empty:
-            continue
-        return StreamlitGeoMatcher.from_frames(
-            nz=nz,
-            au=au,
-            nz_rules=_load_frame_optional(source, f"{root}/nz_geo_area_rules.csv"),
-            au_rules=_load_frame_optional(source, f"{root}/au_geo_match_rules.csv"),
-        )
-    return None
+    nz = _load_geo_frame_optional(source, f"{REMOTE_GEO_ROOT}/nz_geo_dimension.csv")
+    au = _load_geo_frame_optional(source, f"{REMOTE_GEO_ROOT}/au_geo_dimension.csv")
+    if nz.empty or au.empty:
+        return None
+    return StreamlitGeoMatcher.from_frames(
+        nz=nz,
+        au=au,
+        nz_rules=_load_geo_frame_optional(source, f"{REMOTE_GEO_ROOT}/nz_geo_area_rules.csv"),
+        au_rules=_load_geo_frame_optional(source, f"{REMOTE_GEO_ROOT}/au_geo_match_rules.csv"),
+    )
 
 
 def _load_frame_optional(source: DataSource, relative_path: str) -> pd.DataFrame:
@@ -204,6 +204,16 @@ def _load_frame_optional(source: DataSource, relative_path: str) -> pd.DataFrame
         return pd.DataFrame()
 
 
+def _load_geo_frame_optional(source: DataSource, relative_path: str) -> pd.DataFrame:
+    try:
+        text = _read_github_project_text(source, source.github_geo_project, relative_path)
+    except DataLoadError:
+        return pd.DataFrame()
+    from io import StringIO
+
+    return pd.read_csv(StringIO(text))
+
+
 def _read_text(source: DataSource, relative_path: str) -> str:
     if source.backend == "local":
         path = _local_path(source, relative_path)
@@ -211,7 +221,7 @@ def _read_text(source: DataSource, relative_path: str) -> str:
             raise DataLoadError(f"Missing local data file: {path}")
         return path.read_text(encoding="utf-8-sig")
     if source.backend == "github_private":
-        return _read_github_text(source, relative_path)
+        return _read_github_project_text(source, source.github_project, relative_path)
     raise DataLoadError(f"Unsupported DATA_BACKEND: {source.backend}")
 
 
@@ -225,7 +235,7 @@ def _local_path(source: DataSource, relative_path: str) -> Path:
     return root / relative_path
 
 
-def _read_github_text(source: DataSource, relative_path: str) -> str:
+def _read_github_project_text(source: DataSource, project: str, relative_path: str) -> str:
     if not source.github_token:
         raise DataLoadError(
             "DATA_GITHUB_TOKEN is required when DATA_BACKEND=github_private. "
@@ -233,7 +243,7 @@ def _read_github_text(source: DataSource, relative_path: str) -> str:
             "and add it in Streamlit app Secrets."
         )
 
-    github_path = f"projects/{source.github_project}/{relative_path}"
+    github_path = f"projects/{project}/{relative_path}"
     url = f"https://api.github.com/repos/{source.github_repo}/contents/{quote(github_path, safe='/')}"
     headers = {
         "Accept": "application/vnd.github.raw+json",
@@ -254,7 +264,7 @@ def _read_github_text(source: DataSource, relative_path: str) -> str:
         raise DataLoadError(
             f"Private data file not found on GitHub: {relative_path}. "
             f"Checked repo={source.github_repo}, ref={source.github_ref}, "
-            f"project={source.github_project}."
+            f"project={project}."
         )
     raise DataLoadError(f"GitHub data request failed for {relative_path}: HTTP {status}")
 
