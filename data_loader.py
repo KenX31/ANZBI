@@ -43,6 +43,7 @@ class DataSource:
     github_project: str = PROJECT_ID
     github_geo_project: str = GEO_PROJECT_ID
     github_token: str = ""
+    amount_unit: str = "minor"
 
 
 def _secret_or_env(name: str, default: str = "") -> str:
@@ -74,6 +75,7 @@ def resolve_data_source() -> DataSource:
         github_project=_secret_or_env("DATA_PROJECT", PROJECT_ID),
         github_geo_project=_secret_or_env("DATA_GEO_PROJECT", GEO_PROJECT_ID),
         github_token=_secret_or_env("DATA_GITHUB_TOKEN", ""),
+        amount_unit=_secret_or_env("DATA_AMOUNT_UNIT", "minor").strip().lower(),
     )
 
 
@@ -146,11 +148,11 @@ def _load_frame(source: DataSource, relative_path: str) -> pd.DataFrame:
         path = _local_path(source, relative_path)
         if not path.exists():
             raise DataLoadError(f"Missing local data file: {path}")
-        return pd.read_csv(path)
+        return _normalize_amount_units(pd.read_csv(path), source.amount_unit)
     text = _read_text(source, relative_path)
     from io import StringIO
 
-    return pd.read_csv(StringIO(text))
+    return _normalize_amount_units(pd.read_csv(StringIO(text)), source.amount_unit)
 
 
 def _load_page_rows(source: DataSource, relative_path: str) -> pd.DataFrame:
@@ -212,6 +214,23 @@ def _load_geo_frame_optional(source: DataSource, relative_path: str) -> pd.DataF
     from io import StringIO
 
     return pd.read_csv(StringIO(text))
+
+
+def _normalize_amount_units(df: pd.DataFrame, amount_unit: str) -> pd.DataFrame:
+    if df.empty or amount_unit not in {"minor", "cents", "fen"}:
+        return df
+    out = df.copy()
+    for column in out.columns:
+        if not _is_amount_column(column):
+            continue
+        values = pd.to_numeric(out[column], errors="coerce")
+        out[column] = (values / 100).round(2)
+    return out
+
+
+def _is_amount_column(column: str) -> bool:
+    name = str(column).lower()
+    return "amount" in name or name.startswith("trade_amt") or name.startswith("txn_amt")
 
 
 def _read_text(source: DataSource, relative_path: str) -> str:

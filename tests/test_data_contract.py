@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from charts import combo_line_bar_option, donut_option, horizontal_bar_option
-from data_loader import DataLoadError, validate_project
+from data_loader import DataLoadError, _normalize_amount_units, validate_project
 from exports import (
     activation_internal_export,
     activation_provider_export,
@@ -111,6 +111,26 @@ def test_activation_provider_export_excludes_internal_ids() -> None:
     assert "candidate_rank" not in provider.columns
     assert "merchant_id" in internal.columns
     assert "candidate_rank" in internal.columns
+
+
+def test_amount_columns_are_scaled_from_minor_units() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "txn_amount_30d": 12345,
+                "trade_amt_prev_1m": 250,
+                "txn_count_30d": 7,
+                "merchant_id": "m1",
+            }
+        ]
+    )
+
+    normalized = _normalize_amount_units(rows, "minor")
+
+    assert normalized.loc[0, "txn_amount_30d"] == 123.45
+    assert normalized.loc[0, "trade_amt_prev_1m"] == 2.5
+    assert normalized.loc[0, "txn_count_30d"] == 7
+    assert normalized.loc[0, "merchant_id"] == "m1"
 
 
 def test_reporting_geography_keeps_country_specific_levels() -> None:

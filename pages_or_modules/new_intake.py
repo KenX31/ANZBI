@@ -16,7 +16,7 @@ from charts import (
 from exports import csv_bytes, new_intake_internal_export, new_intake_provider_export
 from filters import apply_text_filter, disabled_multiselect_filter, multiselect_filter, options
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
-from metrics import count_flag, format_int, format_money, format_pct, rate, sum_number
+from metrics import count_flag, format_int, format_pct, rate, sum_number
 
 
 def render_new_intake_page(data: dict[str, object]) -> None:
@@ -42,7 +42,7 @@ def render_new_intake_page(data: dict[str, object]) -> None:
     c1.metric("Merchants", format_int(total))
     c2.metric("30d Active", format_pct(rate(active, total)))
     c3.metric("Latest", str(latest_month))
-    c4.metric("30d Amount", format_money(sum_number(filtered, "txn_amount_30d")))
+    c4.metric("30d Txns", format_int(sum_number(filtered, "txn_count_30d")))
 
     if filtered.empty:
         st.info("No merchants match the current filters.")

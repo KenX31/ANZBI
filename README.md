@@ -62,12 +62,19 @@ DATA_GITHUB_REPO = "KenX31/anzdata"
 DATA_GITHUB_REF = "main"
 DATA_PROJECT = "anz-bi-platform"
 DATA_GEO_PROJECT = "anz-geography"
+DATA_AMOUNT_UNIT = "minor"
 DATA_GITHUB_TOKEN = "..."
 ```
 
 `DATA_GITHUB_TOKEN` should be a GitHub fine-grained token or classic PAT that can
 read repository contents from the private `KenX31/anzdata` repo. Keep it only in
 Streamlit Secrets; never commit it to this code repository.
+
+`DATA_AMOUNT_UNIT` defaults to `minor`, because current private BI data stores
+`txn_amount_*` and `trade_amt_*` fields in cents/fen-style minor units. The app
+divides amount fields by `100` at load time for KPI tables, charts, and exports.
+If a future data refresh writes amounts already in major currency units, set this
+secret to `major` before deploying that contract.
 
 ## Build Private Data Package
 
