@@ -111,8 +111,20 @@ def render_new_intake_page(data: dict[str, object]) -> None:
             channel = _distribution(filtered, "channel_type", value_map=CHANNEL_LABELS)
             render_echart(donut_option(channel, label="label", value="count", title="渠道分布"), key="chart_ni_channel", height=330)
         with c2:
-            industry = _distribution(filtered, "mcc_major_industry").head(14)
-            render_echart(treemap_option(industry, label="label", value="count", title="行业分布"), key="chart_ni_industry", height=330)
+            industry = _industry_activation_treemap(filtered).head(14)
+            render_echart(
+                treemap_option(
+                    industry,
+                    label="label",
+                    value="merchant_count",
+                    title="行业分布：面积=当前筛选商户占比，颜色=30天激活率",
+                    color_by="active_30d_rate",
+                    color_name="30天激活率",
+                    high_is_good=True,
+                ),
+                key="chart_ni_industry",
+                height=330,
+            )
 
     with tab_institutions:
         inst = _institution_rollup(filtered)
@@ -434,6 +446,20 @@ def _distribution(df: pd.DataFrame, column: str, *, value_map: dict[str, str] | 
     else:
         out["label"] = out["label"].replace({"UNKNOWN": "未分类"})
     return out
+
+
+def _industry_activation_treemap(df: pd.DataFrame) -> pd.DataFrame:
+    if "mcc_major_industry" not in df.columns:
+        return pd.DataFrame(columns=["label", "merchant_count", "active_30d_count", "active_30d_rate"])
+    working = df.copy()
+    working["label"] = working["mcc_major_industry"].fillna("").astype(str).str.strip()
+    working.loc[working["label"].isin(["", "nan", "None", "UNKNOWN"]), "label"] = "未分类"
+    grouped = working.groupby("label", dropna=False).agg(
+        merchant_count=("merchant_id", "count"),
+        active_30d_count=("active_30d_flag", lambda s: (pd.to_numeric(s, errors="coerce").fillna(0) == 1).sum()),
+    )
+    grouped["active_30d_rate"] = grouped["active_30d_count"] / grouped["merchant_count"].replace(0, pd.NA)
+    return grouped.reset_index().sort_values("merchant_count", ascending=False)
 
 
 def _select_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:

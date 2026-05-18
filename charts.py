@@ -246,14 +246,22 @@ def donut_option(
         for row in df.to_dict("records")
     ]
     return _base_option(title) | {
+        "tooltip": _item_tooltip(),
         "legend": {"orient": "vertical", "right": 12, "top": 44, "textStyle": {"color": TEXT_MUTED}},
         "series": [
             {
                 "type": "pie",
-                "radius": ["48%", "72%"],
-                "center": ["40%", "56%"],
+                "radius": ["42%", "66%"],
+                "center": ["36%", "56%"],
                 "avoidLabelOverlap": True,
-                "label": {"show": False},
+                "label": {
+                    "show": True,
+                    "position": "outside",
+                    "formatter": "{b}\n{d}%",
+                    "color": TEXT_DARK,
+                    "fontWeight": 500,
+                },
+                "labelLine": {"show": True, "length": 12, "length2": 8, "lineStyle": {"color": BORDER}},
                 "itemStyle": {"borderColor": PALETTE["white"], "borderWidth": 2},
                 "emphasis": {"label": {"show": True, "formatter": "{b}\n{d}%", "color": TEXT_DARK}},
                 "data": data,
@@ -262,18 +270,37 @@ def donut_option(
     }
 
 
-def treemap_option(df: pd.DataFrame, *, label: str, value: str, title: str) -> dict[str, Any]:
+def treemap_option(
+    df: pd.DataFrame,
+    *,
+    label: str,
+    value: str,
+    title: str,
+    color_by: str | None = None,
+    color_name: str = "",
+    high_is_good: bool = True,
+) -> dict[str, Any]:
+    total = pd.to_numeric(df[value], errors="coerce").fillna(0).sum() if value in df.columns else 0
     data = [
-        {"name": str(row.get(label) or "UNKNOWN"), "value": _json_value(row.get(value))}
+        _treemap_item(
+            row,
+            label=label,
+            value=value,
+            total=float(total or 0),
+            color_by=color_by,
+            color_name=color_name,
+            high_is_good=high_is_good,
+        )
         for row in df.to_dict("records")
     ]
     return _base_option(title) | {
+        "tooltip": _item_tooltip(),
         "series": [
             {
                 "type": "treemap",
                 "roam": False,
                 "breadcrumb": {"show": False},
-                "label": {"show": True, "formatter": "{b}", "color": PALETTE["white"], "fontWeight": 500},
+                "label": {"show": True, "color": PALETTE["white"], "fontWeight": 600, "fontSize": 12},
                 "upperLabel": {"show": False},
                 "itemStyle": {"borderColor": PALETTE["white"], "borderWidth": 2, "gapWidth": 2},
                 "data": data,
@@ -284,6 +311,70 @@ def treemap_option(df: pd.DataFrame, *, label: str, value: str, title: str) -> d
 
 def empty_chart(message: str = "当前筛选下没有可展示的数据。") -> None:
     st.info(message)
+
+
+def _treemap_item(
+    row: dict[str, Any],
+    *,
+    label: str,
+    value: str,
+    total: float,
+    color_by: str | None,
+    color_name: str,
+    high_is_good: bool,
+) -> dict[str, Any]:
+    name = str(row.get(label) or "UNKNOWN")
+    count = float(row.get(value) or 0)
+    share = count / total if total else 0
+    lines = [name, f"占比 {share:.1%}"]
+    item: dict[str, Any] = {
+        "name": name,
+        "value": _json_value(row.get(value)),
+        "label": {"formatter": "\n".join(lines)},
+    }
+    if color_by:
+        rate = _bounded_rate(row.get(color_by))
+        if color_name:
+            lines.append(f"{color_name} {rate:.1%}")
+            item["label"] = {"formatter": "\n".join(lines)}
+        item["itemStyle"] = {"color": _rate_color(rate, high_is_good=high_is_good)}
+    return item
+
+
+def _bounded_rate(value: Any) -> float:
+    try:
+        rate = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(1.0, rate))
+
+
+def _rate_color(rate: float, *, high_is_good: bool) -> str:
+    if high_is_good:
+        return _blend_color(PALETTE["cool_gray"], PALETTE["green"], rate)
+    return _blend_color(PALETTE["green"], PALETTE["forest"], rate)
+
+
+def _blend_color(start: str, end: str, ratio: float) -> str:
+    start_rgb = _hex_to_rgb(start)
+    end_rgb = _hex_to_rgb(end)
+    mixed = tuple(round(s + (e - s) * ratio) for s, e in zip(start_rgb, end_rgb))
+    return "#{:02x}{:02x}{:02x}".format(*mixed)
+
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    cleaned = value.lstrip("#")
+    return tuple(int(cleaned[index : index + 2], 16) for index in (0, 2, 4))  # type: ignore[return-value]
+
+
+def _item_tooltip() -> dict[str, Any]:
+    return {
+        "trigger": "item",
+        "confine": True,
+        "backgroundColor": PALETTE["forest"],
+        "borderColor": PALETTE["teal_gray"],
+        "textStyle": {"color": PALETTE["white"]},
+    }
 
 
 def _base_option(title: str) -> dict[str, Any]:

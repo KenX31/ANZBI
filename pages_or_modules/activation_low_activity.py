@@ -113,8 +113,20 @@ def render_activation_page(data: dict[str, object]) -> None:
             key="chart_act_windows",
             height=330,
         )
-        industry = _distribution(filtered, "mcc_major_industry").head(14)
-        render_echart(treemap_option(industry, label="label", value="count", title="行业分布"), key="chart_act_industry", height=360)
+        industry = _industry_decline_treemap(filtered).head(14)
+        render_echart(
+            treemap_option(
+                industry,
+                label="label",
+                value="merchant_count",
+                title="行业分布：面积=当前筛选商户占比，颜色=活跃下滑率",
+                color_by="low_activity_ratio",
+                color_name="活跃下滑率",
+                high_is_good=False,
+            ),
+            key="chart_act_industry",
+            height=360,
+        )
 
     with tab_area:
         area = _area_rollup(filtered)
@@ -373,6 +385,22 @@ def _area_rollup(df: pd.DataFrame) -> pd.DataFrame:
     )
     grouped["low_activity_ratio"] = grouped["low_activity_count"] / grouped["eligible_count"].replace(0, pd.NA)
     return grouped.reset_index().sort_values(["low_activity_count", "merchant_count"], ascending=False)
+
+
+def _industry_decline_treemap(df: pd.DataFrame) -> pd.DataFrame:
+    if "mcc_major_industry" not in df.columns:
+        return pd.DataFrame(columns=["label", "merchant_count", "eligible_count", "low_activity_count", "low_activity_ratio"])
+    working = df.copy()
+    working["label"] = working["mcc_major_industry"].fillna("").astype(str).str.strip()
+    working.loc[working["label"].isin(["", "nan", "None", "UNKNOWN"]), "label"] = "未分类"
+    grouped = working.groupby("label", dropna=False).agg(
+        merchant_count=("merchant_id", "count"),
+        eligible_count=("eligible_low_activity_flag", "sum"),
+        low_activity_count=("decay_band", lambda s: s.astype(str).isin(LOW_ACTIVITY_BANDS).sum()),
+    )
+    denominator = grouped["eligible_count"].replace(0, pd.NA)
+    grouped["low_activity_ratio"] = (grouped["low_activity_count"] / denominator).fillna(0)
+    return grouped.reset_index().sort_values("merchant_count", ascending=False)
 
 
 def _select_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
