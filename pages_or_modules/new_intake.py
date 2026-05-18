@@ -36,7 +36,10 @@ def render_new_intake_page(data: dict[str, object]) -> None:
         return
 
     st.header("新进件")
-    st.caption("进件月口径：激活表示商户在接入后 30 天内产生交易。")
+    st.caption(
+        "进件月口径：按商户接入月份归档；激活表示商户在接入后30天内产生交易。"
+        "数据按月更新，下一次更新计划为 2026.6.1。"
+    )
     st.info(
         "默认视图：最近 6 个进件月，已排除圳兴商户和线上商户；如需查看完整口径，可在左侧筛选器调整。"
     )
@@ -50,9 +53,9 @@ def render_new_intake_page(data: dict[str, object]) -> None:
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("商户数", format_int(total))
-    c2.metric("30天激活率", format_pct(rate(active, total)))
+    c2.metric("接入后30天激活率", format_pct(rate(active, total)))
     c3.metric("最新月份", str(latest_month))
-    c4.metric("30天交易笔数", format_int(sum_number(filtered, "txn_count_30d")))
+    c4.metric("接入后30天交易笔数", format_int(sum_number(filtered, "txn_count_30d")))
 
     if filtered.empty:
         st.info("当前筛选下没有匹配商户。")
@@ -83,9 +86,9 @@ def render_new_intake_page(data: dict[str, object]) -> None:
                 x="intake_month",
                 bar_y="merchant_count",
                 line_y="active_30d_rate",
-                title="月度进件与30天激活率",
+                title="月度进件与接入后30天激活率",
                 bar_name="进件商户数",
-                line_name="30天激活率",
+                line_name="接入后30天激活率",
             ),
             key="chart_ni_monthly_combo",
             height=390,
@@ -117,9 +120,9 @@ def render_new_intake_page(data: dict[str, object]) -> None:
                     industry,
                     label="label",
                     value="merchant_count",
-                    title="行业分布：面积=当前筛选商户占比，颜色=30天激活率",
+                    title="行业分布：面积=当前筛选商户占比，颜色=接入后30天激活率",
                     color_by="active_30d_rate",
-                    color_name="30天激活率",
+                    color_name="接入后30天激活率",
                     high_is_good=True,
                 ),
                 key="chart_ni_industry",

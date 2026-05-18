@@ -35,9 +35,9 @@ WINDOW_LABELS = {
 }
 
 COLUMN_LABELS = {
-    "active_30d_count": "30天激活商户数",
+    "active_30d_count": "接入后30天激活商户数",
     "active_30d_flag": "接入后30天激活",
-    "active_30d_rate": "30天激活率",
+    "active_30d_rate": "接入后30天激活率",
     "address": "地址",
     "candidate_rank": "候选排名",
     "channel_type": "渠道",

@@ -40,11 +40,11 @@ def test_treemap_labels_show_share_and_rate() -> None:
         value="merchant_count",
         title="行业分布",
         color_by="active_30d_rate",
-        color_name="30天激活率",
+        color_name="接入后30天激活率",
     )
 
     data = option["series"][0]["data"]
-    assert data[0]["label"]["formatter"] == "餐饮\n占比 75.0%\n30天激活率 40.0%"
+    assert data[0]["label"]["formatter"] == "餐饮\n占比 75.0%\n接入后30天激活率 40.0%"
     assert data[0]["itemStyle"]["color"].startswith("#")
 
 
