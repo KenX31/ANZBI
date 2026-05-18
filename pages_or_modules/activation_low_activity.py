@@ -42,17 +42,18 @@ def render_activation_page(data: dict[str, object]) -> None:
 
     st.header("活跃监测")
     st.caption(
-        "当前口径：按 2026 Q1 商户交易额做活跃监测；以 2026.3 有交易额作为可评估基础，"
-        "再观察 2026.1 相对 2026.2 的交易额是否下滑。后续按季度更新数据，下一次周期为 "
+        "当前口径：按 2026 Q1 商户交易频次做活跃监测；以 2026.1 有交易作为可评估基础，"
+        "再观察 2026.3 相对 2026.2 的交易频次是否下滑。后续按季度更新数据，下一次周期为 "
         "2026.04.01-2026.06.30。"
     )
     st.info(
-        "等级解释：稳定表示 2026.1 交易额高于 2026.2 的 70%；稍微下滑表示 2026.1 为 2026.2 的 35%-70%；"
-        "明显下滑表示 2026.1 不高于 2026.2 的 35%；严重下滑表示 2026.2 有交易额但 2026.1 为 0。"
+        "等级解释：严重下滑表示 2026.2 仍有交易、但 2026.3 已经为 0；明显下滑表示 2026.3 交易频次相对 "
+        "2026.2 降到 35% 以下；稍微下滑表示 2026.3 交易频次相对 2026.2 降到 70% 以下；"
+        "稳定表示仍在活跃、暂时未落入低活跃规则。"
         "这些等级用于生成服务商跟进清单。"
     )
 
-    rows = _with_amount_decline_band(_normalize_numeric(rows))
+    rows = _with_frequency_decline_band(_normalize_numeric(rows))
     filtered = _with_priority_label(_sidebar_filters(rows))
     eligible = int(sum_number(filtered, "eligible_low_activity_flag"))
     low_activity = int(filtered["decay_band"].astype(str).isin(LOW_ACTIVITY_BANDS).sum()) if "decay_band" in filtered else 0
@@ -100,7 +101,7 @@ def render_activation_page(data: dict[str, object]) -> None:
 
         activity = _activity_windows(filtered)
         render_echart(
-            simple_bar_option(activity, x="window", y="txn_count", title="2026 Q1 月度交易金额", color=PALETTE["cyan"]),
+            simple_bar_option(activity, x="window", y="txn_count", title="2026 Q1 月度交易频次", color=PALETTE["cyan"]),
             key="chart_act_windows",
             height=330,
         )
@@ -139,12 +140,12 @@ def render_activation_page(data: dict[str, object]) -> None:
                 "nz_geo_area",
                 "nz_business_cluster",
                 "mcc_major_industry",
-                "trade_amt_prev_1m",
-                "trade_amt_prev_2m",
                 "trade_amt_prev_3m",
-                "trade_cnt_prev_1m",
-                "trade_cnt_prev_2m",
+                "trade_amt_prev_2m",
+                "trade_amt_prev_1m",
                 "trade_cnt_prev_3m",
+                "trade_cnt_prev_2m",
+                "trade_cnt_prev_1m",
                 "decay_band",
                 "priority_label",
                 "address",
@@ -271,42 +272,42 @@ def _with_priority_label(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _with_amount_decline_band(df: pd.DataFrame) -> pd.DataFrame:
-    required = {"trade_amt_prev_3m", "trade_amt_prev_2m", "trade_amt_prev_1m"}
+def _with_frequency_decline_band(df: pd.DataFrame) -> pd.DataFrame:
+    required = {"trade_cnt_prev_3m", "trade_cnt_prev_2m", "trade_cnt_prev_1m"}
     if not required.issubset(df.columns):
         return df
     out = df.copy()
     bands: list[str] = []
     scores: list[float] = []
     for row in out.to_dict("records"):
-        band, score = _classify_amount_decline(
-            mar=float(row.get("trade_amt_prev_3m") or 0),
-            feb=float(row.get("trade_amt_prev_2m") or 0),
-            jan=float(row.get("trade_amt_prev_1m") or 0),
+        band, score = _classify_frequency_decline(
+            jan=float(row.get("trade_cnt_prev_3m") or 0),
+            feb=float(row.get("trade_cnt_prev_2m") or 0),
+            mar=float(row.get("trade_cnt_prev_1m") or 0),
         )
         bands.append(band)
         scores.append(score)
     out["decay_band"] = bands
     out["activity_decay_score"] = scores
-    out["eligible_low_activity_flag"] = out["trade_amt_prev_3m"].fillna(0).astype(float) > 0
+    out["eligible_low_activity_flag"] = out["trade_cnt_prev_3m"].fillna(0).astype(float) > 0
     return out
 
 
-def _classify_amount_decline(*, mar: float, feb: float, jan: float) -> tuple[str, float]:
-    if mar <= 0:
+def _classify_frequency_decline(*, jan: float, feb: float, mar: float) -> tuple[str, float]:
+    if jan <= 0:
         return "stable", 0.0
     if feb > 0:
-        ratio = jan / feb
-        if jan == 0:
+        ratio = mar / feb
+        if mar == 0:
             return "severe", 1.0
         if ratio <= 0.35:
             return "high", 0.82
         if ratio <= 0.7:
             return "medium", 0.58
         return "stable", 0.2
-    if jan == 0:
+    if mar == 0:
         return "severe", 0.92
-    if jan <= mar * 0.5:
+    if mar <= jan * 0.5:
         return "medium", 0.52
     return "stable", 0.2
 
@@ -325,9 +326,9 @@ def _distribution(df: pd.DataFrame, column: str, *, value_map: dict[str, str] | 
 def _activity_windows(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"window": WINDOW_LABELS["prev_1m"], "txn_count": sum_number(df, "trade_amt_prev_1m")},
-            {"window": WINDOW_LABELS["prev_2m"], "txn_count": sum_number(df, "trade_amt_prev_2m")},
-            {"window": WINDOW_LABELS["prev_3m"], "txn_count": sum_number(df, "trade_amt_prev_3m")},
+            {"window": WINDOW_LABELS["prev_3m"], "txn_count": sum_number(df, "trade_cnt_prev_3m")},
+            {"window": WINDOW_LABELS["prev_2m"], "txn_count": sum_number(df, "trade_cnt_prev_2m")},
+            {"window": WINDOW_LABELS["prev_1m"], "txn_count": sum_number(df, "trade_cnt_prev_1m")},
         ]
     )
 

@@ -31,8 +31,8 @@ from pages_or_modules.new_intake import (
 )
 from pages_or_modules.activation_low_activity import (
     _activity_windows,
-    _classify_amount_decline,
-    _with_amount_decline_band,
+    _classify_frequency_decline,
+    _with_frequency_decline_band,
 )
 from scripts.build_private_data_project import _new_intake_source_period
 
@@ -209,35 +209,35 @@ def test_new_intake_default_scope_excludes_online_and_zhenxing() -> None:
     assert scoped["merchant_id"].tolist() == ["offline"]
 
 
-def test_activation_monitoring_uses_q1_amount_decline_bands() -> None:
+def test_activation_monitoring_uses_q1_frequency_decline_bands() -> None:
     rows = pd.DataFrame(
         [
-            {"merchant_id": "stable", "trade_amt_prev_3m": 100, "trade_amt_prev_2m": 100, "trade_amt_prev_1m": 80},
-            {"merchant_id": "medium", "trade_amt_prev_3m": 100, "trade_amt_prev_2m": 100, "trade_amt_prev_1m": 60},
-            {"merchant_id": "high", "trade_amt_prev_3m": 100, "trade_amt_prev_2m": 100, "trade_amt_prev_1m": 20},
-            {"merchant_id": "severe", "trade_amt_prev_3m": 100, "trade_amt_prev_2m": 100, "trade_amt_prev_1m": 0},
+            {"merchant_id": "stable", "trade_cnt_prev_3m": 100, "trade_cnt_prev_2m": 100, "trade_cnt_prev_1m": 80},
+            {"merchant_id": "medium", "trade_cnt_prev_3m": 100, "trade_cnt_prev_2m": 100, "trade_cnt_prev_1m": 60},
+            {"merchant_id": "high", "trade_cnt_prev_3m": 100, "trade_cnt_prev_2m": 100, "trade_cnt_prev_1m": 20},
+            {"merchant_id": "severe", "trade_cnt_prev_3m": 100, "trade_cnt_prev_2m": 100, "trade_cnt_prev_1m": 0},
         ]
     )
 
-    monitored = _with_amount_decline_band(rows)
+    monitored = _with_frequency_decline_band(rows)
 
     assert monitored["decay_band"].tolist() == ["stable", "medium", "high", "severe"]
     assert monitored["eligible_low_activity_flag"].tolist() == [True, True, True, True]
-    assert _classify_amount_decline(mar=0, feb=100, jan=0) == ("stable", 0.0)
+    assert _classify_frequency_decline(jan=0, feb=100, mar=0) == ("stable", 0.0)
 
 
-def test_activation_activity_windows_are_q1_amounts_in_calendar_order() -> None:
+def test_activation_activity_windows_are_q1_frequency_in_calendar_order() -> None:
     rows = pd.DataFrame(
         [
-            {"trade_amt_prev_1m": 10, "trade_amt_prev_2m": 20, "trade_amt_prev_3m": 30},
-            {"trade_amt_prev_1m": 1, "trade_amt_prev_2m": 2, "trade_amt_prev_3m": 3},
+            {"trade_cnt_prev_1m": 10, "trade_cnt_prev_2m": 20, "trade_cnt_prev_3m": 30},
+            {"trade_cnt_prev_1m": 1, "trade_cnt_prev_2m": 2, "trade_cnt_prev_3m": 3},
         ]
     )
 
     windows = _activity_windows(rows)
 
     assert windows["window"].tolist() == ["2026.1", "2026.2", "2026.3"]
-    assert windows["txn_count"].tolist() == [11, 22, 33]
+    assert windows["txn_count"].tolist() == [33, 22, 11]
 
 
 def test_reporting_geography_keeps_country_specific_levels() -> None:

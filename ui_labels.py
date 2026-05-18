@@ -29,9 +29,9 @@ DECAY_BAND_LABELS = {
 }
 
 WINDOW_LABELS = {
-    "prev_1m": "2026.1",
+    "prev_3m": "2026.1",
     "prev_2m": "2026.2",
-    "prev_3m": "2026.3",
+    "prev_1m": "2026.3",
 }
 
 COLUMN_LABELS = {
@@ -67,12 +67,12 @@ COLUMN_LABELS = {
     "priority_label": "服务商跟进级别",
     "scope_country": "国家",
     "severe_count": "严重下滑商户数",
-    "trade_cnt_prev_1m": "2026.1交易笔数",
+    "trade_cnt_prev_3m": "2026.1交易笔数",
     "trade_cnt_prev_2m": "2026.2交易笔数",
-    "trade_cnt_prev_3m": "2026.3交易笔数",
-    "trade_amt_prev_1m": "2026.1交易金额",
+    "trade_cnt_prev_1m": "2026.3交易笔数",
+    "trade_amt_prev_3m": "2026.1交易金额",
     "trade_amt_prev_2m": "2026.2交易金额",
-    "trade_amt_prev_3m": "2026.3交易金额",
+    "trade_amt_prev_1m": "2026.3交易金额",
     "txn_amount_30d": "接入后30天交易金额",
     "txn_count": "交易笔数",
     "txn_count_30d": "接入后30天交易笔数",
