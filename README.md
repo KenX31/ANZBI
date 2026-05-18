@@ -47,16 +47,22 @@ $env:LOCAL_DATA_ROOT = "D:\Tencent\Data analysis\anzdata-worktree\projects\anz-b
 streamlit run app.py
 ```
 
-## LDAP Authentication
+## Authentication
 
-The BI portal supports optional LDAP / Active Directory login through
-[`streamlit-ldap-authenticator`](https://github.com/NathanChen198/streamlit-ldap-authenticator).
+The BI portal supports two authentication modes:
 
-Authentication mode defaults to `auto`:
+- `local`: email + password accounts stored in Streamlit secrets as password hashes
+- `ldap`: optional LDAP / Active Directory login through
+  [`streamlit-ldap-authenticator`](https://github.com/NathanChen198/streamlit-ldap-authenticator)
 
-- if `[ldap]` is present in Streamlit secrets, the login gate is enabled
-- if no LDAP secrets are present, local development opens the BI directly
-- set `AUTH_ENABLED = true` or `[auth].enabled = true` to force authentication
+For ANZ team access without connecting to a company directory server, use `local`.
+
+Authentication defaults to `auto`:
+
+- if `[local_users]` is present in Streamlit secrets, the login gate uses local accounts
+- otherwise, if `[ldap]` is present, the login gate uses LDAP
+- if neither is present, local development opens the BI directly
+- set `AUTH_PROVIDER = "local"` or `AUTH_PROVIDER = "ldap"` to force a provider
 - set `AUTH_ENABLED = false` for trusted local smoke tests only
 
 Start from the checked-in template:
@@ -65,14 +71,37 @@ Start from the checked-in template:
 Copy-Item .streamlit\secrets.example.toml .streamlit\secrets.toml
 ```
 
-Then replace the LDAP server, domain, search base, cookie key, and optional
-authorization rules. `.streamlit/secrets.toml` is ignored by git and must never
-be committed.
+Then replace the users, password hashes, cookie key, and optional authorization
+rules. `.streamlit/secrets.toml` is ignored by git and must never be committed.
 
-Minimum Streamlit secrets:
+Minimum local-account Streamlit secrets:
 
 ```toml
 AUTH_ENABLED = true
+AUTH_PROVIDER = "local"
+
+[local_users."user@example.com"]
+name = "User Name"
+role = "admin"
+permissions = ["*"]
+password_hash = "pbkdf2_sha256$260000$..."
+
+[auth]
+allowed_domains = ["example.com"]
+allowed_users = []
+```
+
+Generate a password hash locally:
+
+```powershell
+python -c "from auth import make_password_hash; print(make_password_hash('replace-with-password'))"
+```
+
+Optional LDAP secrets:
+
+```toml
+AUTH_ENABLED = true
+AUTH_PROVIDER = "ldap"
 
 [ldap]
 server_path = "ldap://ldap.example.com"
@@ -80,11 +109,6 @@ domain = "example"
 search_base = "dc=example,dc=com"
 attributes = ["sAMAccountName", "distinguishedName", "userPrincipalName", "mail", "displayName", "manager", "title"]
 use_ssl = true
-
-[session_state_names]
-user = "anz_bi_login_user"
-remember_me = "anz_bi_login_remember_me"
-auth_result = "anz_bi_login_result"
 
 [auth_cookie]
 name = "anz_bi_login_cookie"

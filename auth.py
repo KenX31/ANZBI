@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import os
+import secrets as py_secrets
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -9,6 +13,10 @@ import streamlit as st
 
 TRUE_VALUES = {"1", "true", "yes", "y", "on", "enabled"}
 FALSE_VALUES = {"0", "false", "no", "n", "off", "disabled"}
+AUTH_PROVIDERS = {"local", "ldap"}
+LOCAL_USER_SESSION_KEY = "anz_bi_local_user"
+PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
+PASSWORD_HASH_ITERATIONS = 260_000
 
 DEFAULT_SIGNIN_FORM = {
     "maxWidth": 460,
@@ -45,7 +53,9 @@ class AuthConfigError(RuntimeError):
 @dataclass(frozen=True)
 class AuthSettings:
     enabled: bool
+    provider: str
     ldap: dict[str, Any] | None
+    local_users: dict[str, dict[str, Any]]
     session_state_names: dict[str, Any] | None
     auth_cookie: dict[str, Any] | None
     encryptor: dict[str, Any] | None
@@ -59,6 +69,12 @@ def require_login() -> dict[str, Any] | None:
     settings = resolve_auth_settings()
     if not settings.enabled:
         return None
+
+    if settings.provider == "local":
+        return _require_local_login(settings)
+    if settings.provider != "ldap":
+        st.error(f"不支持的登录方式：{settings.provider}")
+        st.stop()
 
     try:
         from streamlit_ldap_authenticator import Authenticate
@@ -102,16 +118,34 @@ def resolve_auth_settings(
     env = os.environ if environ is None else environ
     auth = _section(raw_secrets, "auth")
     ldap = _section(raw_secrets, "ldap")
+    local_users = _local_users(_section(raw_secrets, "local_users"))
     secret_enabled = _secret_value(raw_secrets, "AUTH_ENABLED")
     if secret_enabled is None:
         secret_enabled = auth.get("enabled")
+    secret_provider = _secret_value(raw_secrets, "AUTH_PROVIDER")
+    if secret_provider is None:
+        secret_provider = auth.get("provider")
 
-    enabled = _resolve_auth_enabled(secret_enabled, env.get("AUTH_ENABLED"), ldap_present=bool(ldap))
+    provider = _resolve_auth_provider(
+        secret_provider,
+        env.get("AUTH_PROVIDER"),
+        ldap_present=bool(ldap),
+        local_present=bool(local_users),
+    )
+    enabled = _resolve_auth_enabled(
+        secret_enabled,
+        env.get("AUTH_ENABLED"),
+        provider=provider,
+        ldap_present=bool(ldap),
+        local_present=bool(local_users),
+    )
     signin_form = _deep_merge(DEFAULT_SIGNIN_FORM, _section(raw_secrets, "signin_form"))
     signout_form = _deep_merge(DEFAULT_SIGNOUT_FORM, _section(raw_secrets, "signout_form"))
     settings = AuthSettings(
         enabled=enabled,
+        provider=provider,
         ldap=ldap or None,
+        local_users=local_users,
         session_state_names=_section(raw_secrets, "session_state_names") or None,
         auth_cookie=_section(raw_secrets, "auth_cookie") or None,
         encryptor=_section(raw_secrets, "encryptor") or None,
@@ -120,9 +154,111 @@ def resolve_auth_settings(
         allowed_users=_normalized_values(auth.get("allowed_users"), env.get("AUTH_ALLOWED_USERS")),
         allowed_domains=_normalized_domains(auth.get("allowed_domains"), env.get("AUTH_ALLOWED_DOMAINS")),
     )
-    if settings.enabled and not settings.ldap:
+    if settings.enabled and settings.provider == "ldap" and not settings.ldap:
         raise AuthConfigError("启用 LDAP 登录时必须配置 `[ldap]` secrets。")
+    if settings.enabled and settings.provider == "local" and not settings.local_users:
+        raise AuthConfigError("启用本地账号登录时必须配置 `[local_users]` secrets。")
     return settings
+
+
+def make_password_hash(password: str, *, salt: bytes | None = None, iterations: int = PASSWORD_HASH_ITERATIONS) -> str:
+    if salt is None:
+        salt = py_secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return "$".join(
+        [
+            PASSWORD_HASH_ALGORITHM,
+            str(iterations),
+            base64.urlsafe_b64encode(salt).decode("ascii"),
+            base64.urlsafe_b64encode(digest).decode("ascii"),
+        ]
+    )
+
+
+def verify_password(password: str, encoded_hash: str) -> bool:
+    try:
+        algorithm, iterations_text, salt_text, digest_text = str(encoded_hash).split("$", 3)
+        if algorithm != PASSWORD_HASH_ALGORITHM:
+            return False
+        iterations = int(iterations_text)
+        salt = base64.urlsafe_b64decode(salt_text.encode("ascii"))
+        expected = base64.urlsafe_b64decode(digest_text.encode("ascii"))
+    except (TypeError, ValueError):
+        return False
+    actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return hmac.compare_digest(actual, expected)
+
+
+def _require_local_login(settings: AuthSettings) -> dict[str, Any]:
+    current_user = st.session_state.get(LOCAL_USER_SESSION_KEY)
+    if isinstance(current_user, dict):
+        _render_local_logout(current_user, settings)
+        return current_user
+
+    title = _form_text(settings.signin_form, ("title", "text"), "ANZ BI 登录")
+    username_label = _form_text(settings.signin_form, ("username", "label"), "账号")
+    username_placeholder = _form_text(settings.signin_form, ("username", "placeholder"), "邮箱")
+    password_label = _form_text(settings.signin_form, ("password", "label"), "密码")
+    password_placeholder = _form_text(settings.signin_form, ("password", "placeholder"), "请输入密码")
+    submit_label = _form_text(settings.signin_form, ("submit", "label"), "登录")
+
+    st.subheader(title)
+    with st.form("anz_bi_local_login_form"):
+        username = st.text_input(username_label, placeholder=username_placeholder)
+        password = st.text_input(password_label, placeholder=password_placeholder, type="password")
+        submitted = st.form_submit_button(submit_label, use_container_width=True)
+
+    if submitted:
+        user = _authenticate_local_user(settings, username, password)
+        if user is None:
+            st.error("账号或密码不正确。")
+        else:
+            st.session_state[LOCAL_USER_SESSION_KEY] = user
+            st.rerun()
+    st.stop()
+
+
+def _authenticate_local_user(settings: AuthSettings, username: str, password: str) -> dict[str, Any] | None:
+    normalized_username = str(username or "").strip().casefold()
+    if not normalized_username or not password:
+        return None
+    user_config = settings.local_users.get(normalized_username)
+    if not user_config:
+        return None
+    password_hash = str(user_config.get("password_hash") or "")
+    if not verify_password(password, password_hash):
+        return None
+    user = _local_user_info(normalized_username, user_config)
+    result = _authorization_check(settings)(None, user)
+    return user if result is True else None
+
+
+def _local_user_info(username: str, user_config: Mapping[str, Any]) -> dict[str, Any]:
+    name = str(user_config.get("name") or username).strip()
+    role = str(user_config.get("role") or "viewer").strip().lower()
+    permissions = user_config.get("permissions") or []
+    if isinstance(permissions, str):
+        permissions = [permissions]
+    return {
+        "auth_provider": "local",
+        "userPrincipalName": username,
+        "mail": username,
+        "displayName": name,
+        "role": role,
+        "permissions": [str(permission) for permission in permissions],
+    }
+
+
+def _render_local_logout(user: Mapping[str, Any], settings: AuthSettings) -> None:
+    label = _form_text(settings.signout_form, ("submit", "label"), "退出登录")
+    display_name = _display_name(user)
+    role = str(user.get("role") or "").strip()
+    role_suffix = f" / {role}" if role else ""
+    with st.sidebar:
+        st.caption(f"已登录：{display_name}{role_suffix}")
+        if st.button(label, key="anz_bi_local_logout", use_container_width=True):
+            st.session_state.pop(LOCAL_USER_SESSION_KEY, None)
+            st.rerun()
 
 
 def _authorization_check(settings: AuthSettings):
@@ -178,19 +314,76 @@ def _domain_from_identifier(value: str) -> str:
     return ""
 
 
-def _resolve_auth_enabled(secret_value: Any, env_value: str | None, *, ldap_present: bool) -> bool:
+def _resolve_auth_provider(
+    secret_value: Any,
+    env_value: str | None,
+    *,
+    ldap_present: bool,
+    local_present: bool,
+) -> str:
     for value in (env_value, secret_value):
         if value is None or str(value).strip() == "":
             continue
         normalized = str(value).strip().casefold()
         if normalized == "auto":
-            return ldap_present
+            break
+        if normalized in AUTH_PROVIDERS:
+            return normalized
+        raise AuthConfigError(f"AUTH_PROVIDER/`[auth].provider` 值无效：{value!r}")
+    if local_present:
+        return "local"
+    if ldap_present:
+        return "ldap"
+    return "local"
+
+
+def _resolve_auth_enabled(
+    secret_value: Any,
+    env_value: str | None,
+    *,
+    provider: str,
+    ldap_present: bool,
+    local_present: bool,
+) -> bool:
+    for value in (env_value, secret_value):
+        if value is None or str(value).strip() == "":
+            continue
+        normalized = str(value).strip().casefold()
+        if normalized == "auto":
+            return local_present if provider == "local" else ldap_present
         if normalized in TRUE_VALUES:
             return True
         if normalized in FALSE_VALUES:
             return False
         raise AuthConfigError(f"AUTH_ENABLED/`[auth].enabled` 值无效：{value!r}")
-    return ldap_present
+    return local_present if provider == "local" else ldap_present
+
+
+def _local_users(section: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    users: dict[str, dict[str, Any]] = {}
+    for username, raw_config in section.items():
+        normalized_username = str(username or "").strip().casefold()
+        if not normalized_username:
+            continue
+        if hasattr(raw_config, "to_dict"):
+            config = dict(raw_config.to_dict())
+        elif isinstance(raw_config, Mapping):
+            config = dict(raw_config)
+        else:
+            raise AuthConfigError(f"本地账号 {username!r} 配置必须是 TOML table。")
+        if not str(config.get("password_hash") or "").strip():
+            raise AuthConfigError(f"本地账号 {username!r} 缺少 password_hash。")
+        users[normalized_username] = config
+    return users
+
+
+def _form_text(config: Mapping[str, Any], path: tuple[str, ...], default: str) -> str:
+    value: Any = config
+    for key in path:
+        if not isinstance(value, Mapping) or key not in value:
+            return default
+        value = value[key]
+    return str(value or default)
 
 
 def _normalized_values(secret_value: Any, env_value: str | None = None) -> tuple[str, ...]:

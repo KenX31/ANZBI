@@ -10,7 +10,15 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from auth import AuthConfigError, AuthSettings, _authorization_check, resolve_auth_settings
+from auth import (
+    AuthConfigError,
+    AuthSettings,
+    _authenticate_local_user,
+    _authorization_check,
+    make_password_hash,
+    resolve_auth_settings,
+    verify_password,
+)
 from charts import combo_line_bar_option, donut_option, horizontal_bar_option
 from charts import combo_bar_count_line_option
 from data_loader import DataLoadError, _normalize_amount_units, _read_csv_text, validate_project
@@ -42,6 +50,7 @@ from scripts.build_private_data_project import _new_intake_source_period
 def test_auth_settings_auto_disabled_without_ldap_config() -> None:
     settings = resolve_auth_settings(secrets={}, environ={})
     assert settings.enabled is False
+    assert settings.provider == "local"
 
 
 def test_auth_settings_auto_enables_with_ldap_and_merges_form_config() -> None:
@@ -63,6 +72,7 @@ def test_auth_settings_auto_enables_with_ldap_and_merges_form_config() -> None:
     )
 
     assert settings.enabled is True
+    assert settings.provider == "ldap"
     assert settings.ldap is not None
     assert settings.signin_form["title"]["text"] == "企业账号登录"
     assert settings.signin_form["username"]["label"] == "账号"
@@ -72,7 +82,7 @@ def test_auth_settings_auto_enables_with_ldap_and_merges_form_config() -> None:
 
 def test_auth_settings_forced_enabled_requires_ldap_config() -> None:
     try:
-        resolve_auth_settings(secrets={"auth": {"enabled": True}}, environ={})
+        resolve_auth_settings(secrets={"auth": {"enabled": True, "provider": "ldap"}}, environ={})
     except AuthConfigError as exc:
         assert "[ldap]" in str(exc)
     else:
@@ -82,6 +92,7 @@ def test_auth_settings_forced_enabled_requires_ldap_config() -> None:
 def test_auth_settings_reads_top_level_auth_enabled_secret() -> None:
     settings = resolve_auth_settings(secrets={"AUTH_ENABLED": "false", "ldap": {"server_path": "ldap://x"}}, environ={})
     assert settings.enabled is False
+    assert settings.provider == "ldap"
 
 
 def test_auth_settings_top_level_auth_enabled_overrides_auth_section() -> None:
@@ -92,10 +103,72 @@ def test_auth_settings_top_level_auth_enabled_overrides_auth_section() -> None:
     assert settings.enabled is False
 
 
+def test_auth_settings_auto_enables_local_users() -> None:
+    password_hash = make_password_hash("secret", salt=b"1234567890abcdef")
+    settings = resolve_auth_settings(
+        secrets={
+            "local_users": {
+                "v_kenhzxia@global.tencent.com": {
+                    "name": "Ken",
+                    "role": "admin",
+                    "permissions": ["*"],
+                    "password_hash": password_hash,
+                }
+            }
+        },
+        environ={},
+    )
+
+    assert settings.enabled is True
+    assert settings.provider == "local"
+    assert settings.local_users["v_kenhzxia@global.tencent.com"]["role"] == "admin"
+
+
+def test_password_hash_verification() -> None:
+    password_hash = make_password_hash("xhz1998", salt=b"1234567890abcdef")
+    assert verify_password("xhz1998", password_hash) is True
+    assert verify_password("wrong", password_hash) is False
+    assert verify_password("xhz1998", "not-a-valid-hash") is False
+
+
+def test_local_user_authentication_returns_admin_identity() -> None:
+    password_hash = make_password_hash("xhz1998", salt=b"1234567890abcdef")
+    settings = AuthSettings(
+        enabled=True,
+        provider="local",
+        ldap=None,
+        local_users={
+            "v_kenhzxia@global.tencent.com": {
+                "name": "Ken",
+                "role": "admin",
+                "permissions": ["*"],
+                "password_hash": password_hash,
+            }
+        },
+        session_state_names=None,
+        auth_cookie=None,
+        encryptor=None,
+        signin_form={},
+        signout_form={},
+        allowed_users=(),
+        allowed_domains=(),
+    )
+
+    user = _authenticate_local_user(settings, "V_KenHzXia@Global.Tencent.Com", "xhz1998")
+
+    assert user is not None
+    assert user["displayName"] == "Ken"
+    assert user["role"] == "admin"
+    assert user["permissions"] == ["*"]
+    assert _authenticate_local_user(settings, "v_kenhzxia@global.tencent.com", "wrong") is None
+
+
 def test_auth_authorization_accepts_allowed_users_and_domains() -> None:
     settings = AuthSettings(
         enabled=True,
+        provider="ldap",
         ldap={},
+        local_users={},
         session_state_names=None,
         auth_cookie=None,
         encryptor=None,
