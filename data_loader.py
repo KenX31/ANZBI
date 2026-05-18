@@ -80,12 +80,17 @@ def resolve_data_source() -> DataSource:
     )
 
 
-@st.cache_data(show_spinner=False)
 def load_project_data() -> dict[str, Any]:
     source = resolve_data_source()
     manifest = _load_json(source, "manifest.json")
+    data_version = str(manifest.get("version") or "")
+    project = _load_project_data_cached(source, data_version)
+    return {"manifest": manifest, **project}
+
+
+@st.cache_data(show_spinner=False)
+def _load_project_data_cached(source: DataSource, data_version: str) -> dict[str, Any]:
     return {
-        "manifest": manifest,
         "new_intake": {
             "rows": _load_page_rows(source, "processed/new_intake/new_intake_rows.csv"),
             "summary": _load_json(source, "processed/new_intake/new_intake_summary.json"),
