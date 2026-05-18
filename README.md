@@ -47,6 +47,61 @@ $env:LOCAL_DATA_ROOT = "D:\Tencent\Data analysis\anzdata-worktree\projects\anz-b
 streamlit run app.py
 ```
 
+## LDAP Authentication
+
+The BI portal supports optional LDAP / Active Directory login through
+[`streamlit-ldap-authenticator`](https://github.com/NathanChen198/streamlit-ldap-authenticator).
+
+Authentication mode defaults to `auto`:
+
+- if `[ldap]` is present in Streamlit secrets, the login gate is enabled
+- if no LDAP secrets are present, local development opens the BI directly
+- set `AUTH_ENABLED = true` or `[auth].enabled = true` to force authentication
+- set `AUTH_ENABLED = false` for trusted local smoke tests only
+
+Start from the checked-in template:
+
+```powershell
+Copy-Item .streamlit\secrets.example.toml .streamlit\secrets.toml
+```
+
+Then replace the LDAP server, domain, search base, cookie key, and optional
+authorization rules. `.streamlit/secrets.toml` is ignored by git and must never
+be committed.
+
+Minimum Streamlit secrets:
+
+```toml
+AUTH_ENABLED = true
+
+[ldap]
+server_path = "ldap://ldap.example.com"
+domain = "example"
+search_base = "dc=example,dc=com"
+attributes = ["sAMAccountName", "distinguishedName", "userPrincipalName", "mail", "displayName", "manager", "title"]
+use_ssl = true
+
+[session_state_names]
+user = "anz_bi_login_user"
+remember_me = "anz_bi_login_remember_me"
+auth_result = "anz_bi_login_result"
+
+[auth_cookie]
+name = "anz_bi_login_cookie"
+key = "replace-with-a-long-random-cookie-signing-key"
+expiry_days = 1
+auto_renewal = true
+delay_sec = 0.1
+
+[auth]
+allowed_domains = ["example.com"]
+allowed_users = []
+```
+
+Optional `SigninFormConfig` / `SignoutFormConfig` overrides can be added under
+`[signin_form]` and `[signout_form]`; nested keys are merged with the default
+Chinese login form labels.
+
 ## Exports
 
 Each BI page has two filtered exports:

@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from auth import AuthConfigError, AuthSettings, _authorization_check, resolve_auth_settings
 from charts import combo_line_bar_option, donut_option, horizontal_bar_option
 from charts import combo_bar_count_line_option
 from data_loader import DataLoadError, _normalize_amount_units, _read_csv_text, validate_project
@@ -36,6 +37,78 @@ from pages_or_modules.activation_low_activity import (
     _with_frequency_decline_band,
 )
 from scripts.build_private_data_project import _new_intake_source_period
+
+
+def test_auth_settings_auto_disabled_without_ldap_config() -> None:
+    settings = resolve_auth_settings(secrets={}, environ={})
+    assert settings.enabled is False
+
+
+def test_auth_settings_auto_enables_with_ldap_and_merges_form_config() -> None:
+    settings = resolve_auth_settings(
+        secrets={
+            "ldap": {
+                "server_path": "ldap://ldap.example.com",
+                "domain": "example",
+                "search_base": "dc=example,dc=com",
+                "attributes": ["userPrincipalName", "displayName"],
+            },
+            "auth": {"allowed_domains": ["@example.com"]},
+            "signin_form": {
+                "title": {"text": "企业账号登录"},
+                "submit": {"label": "进入 BI"},
+            },
+        },
+        environ={},
+    )
+
+    assert settings.enabled is True
+    assert settings.ldap is not None
+    assert settings.signin_form["title"]["text"] == "企业账号登录"
+    assert settings.signin_form["username"]["label"] == "账号"
+    assert settings.signin_form["submit"]["label"] == "进入 BI"
+    assert settings.allowed_domains == ("example.com",)
+
+
+def test_auth_settings_forced_enabled_requires_ldap_config() -> None:
+    try:
+        resolve_auth_settings(secrets={"auth": {"enabled": True}}, environ={})
+    except AuthConfigError as exc:
+        assert "[ldap]" in str(exc)
+    else:
+        raise AssertionError("LDAP auth should require the [ldap] secrets section when enabled")
+
+
+def test_auth_settings_reads_top_level_auth_enabled_secret() -> None:
+    settings = resolve_auth_settings(secrets={"AUTH_ENABLED": "false", "ldap": {"server_path": "ldap://x"}}, environ={})
+    assert settings.enabled is False
+
+
+def test_auth_settings_top_level_auth_enabled_overrides_auth_section() -> None:
+    settings = resolve_auth_settings(
+        secrets={"AUTH_ENABLED": "false", "auth": {"enabled": True}, "ldap": {"server_path": "ldap://x"}},
+        environ={},
+    )
+    assert settings.enabled is False
+
+
+def test_auth_authorization_accepts_allowed_users_and_domains() -> None:
+    settings = AuthSettings(
+        enabled=True,
+        ldap={},
+        session_state_names=None,
+        auth_cookie=None,
+        encryptor=None,
+        signin_form={},
+        signout_form={},
+        allowed_users=("allowed@example.com",),
+        allowed_domains=("partner.example",),
+    )
+    check_user = _authorization_check(settings)
+
+    assert check_user(None, {"userPrincipalName": "allowed@example.com"}) is True
+    assert check_user(None, {"mail": "analyst@partner.example"}) is True
+    assert isinstance(check_user(None, {"mail": "blocked@example.com"}), str)
 
 
 def test_manifest_schema_guard_accepts_expected_versions() -> None:

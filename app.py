@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from auth import AuthConfigError, require_login
 from data_loader import DataLoadError, load_project_data, validate_project
 from pages_or_modules.activation_low_activity import render_activation_page
 from pages_or_modules.new_intake import render_new_intake_page
@@ -19,6 +20,12 @@ def main() -> None:
     _apply_brand_theme()
     st.title("ANZ BI 门户")
     st.caption("新进件与活跃监测 BI")
+
+    try:
+        require_login()
+    except AuthConfigError as exc:
+        st.error(str(exc))
+        st.stop()
 
     try:
         project = load_project_data()
