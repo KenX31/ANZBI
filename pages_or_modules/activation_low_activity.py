@@ -21,10 +21,10 @@ from ui_labels import COUNTRY_LABELS, DECAY_BAND_LABELS, WINDOW_LABELS, display_
 
 LOW_ACTIVITY_BANDS = {"severe", "high", "medium"}
 PRIORITY_LABELS = {
-    "severe": "优先铺设",
-    "high": "重点铺设",
-    "medium": "机会铺设",
-    "stable": "维护经营",
+    "severe": "严重下滑",
+    "high": "明显下滑",
+    "medium": "稍微下滑",
+    "stable": "稳定",
 }
 SEVERITY_DISPLAY_COLORS = {
     label_value(key, DECAY_BAND_LABELS): value for key, value in SEVERITY_COLORS.items()
@@ -37,14 +37,23 @@ def render_activation_page(data: dict[str, object]) -> None:
         country_columns=["scope_country", "country_group", "merchant_country_code"],
     )
     if rows.empty:
-        st.warning("没有可用的活跃低洼数据。")
+        st.warning("没有可用的活跃监测数据。")
         return
 
-    st.header("活跃低洼")
-    st.caption("区域优先口径：前第3个月交易笔数 > 0 为可评估候选，前第2个月和最近1个月用于判断低活跃等级。")
+    st.header("活跃监测")
+    st.caption(
+        "当前口径：按 2026 Q1 商户交易额做活跃监测；以 2026.3 有交易额作为可评估基础，"
+        "再观察 2026.1 相对 2026.2 的交易额是否下滑。后续按季度更新数据，下一次周期为 "
+        "2026.04.01-2026.06.30。"
+    )
+    st.info(
+        "等级解释：稳定表示 2026.1 交易额高于 2026.2 的 70%；稍微下滑表示 2026.1 为 2026.2 的 35%-70%；"
+        "明显下滑表示 2026.1 不高于 2026.2 的 35%；严重下滑表示 2026.2 有交易额但 2026.1 为 0。"
+        "这些等级用于生成服务商跟进清单。"
+    )
 
-    filtered = _sidebar_filters(rows)
-    filtered = _normalize_numeric(_with_priority_label(filtered))
+    rows = _with_amount_decline_band(_normalize_numeric(rows))
+    filtered = _with_priority_label(_sidebar_filters(rows))
     eligible = int(sum_number(filtered, "eligible_low_activity_flag"))
     low_activity = int(filtered["decay_band"].astype(str).isin(LOW_ACTIVITY_BANDS).sum()) if "decay_band" in filtered else 0
     severe = int((filtered["decay_band"].astype(str) == "severe").sum()) if "decay_band" in filtered else 0
@@ -52,8 +61,8 @@ def render_activation_page(data: dict[str, object]) -> None:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("候选商户", format_int(len(filtered)))
     c2.metric("可评估", format_int(eligible))
-    c3.metric("低活跃率", format_pct(rate(low_activity, eligible)))
-    c4.metric("严重低活跃", format_int(severe))
+    c3.metric("下滑占比", format_pct(rate(low_activity, eligible)))
+    c4.metric("严重下滑", format_int(severe))
 
     if filtered.empty:
         st.info("当前筛选下没有匹配商户。")
@@ -81,7 +90,7 @@ def render_activation_page(data: dict[str, object]) -> None:
         with c1:
             severity = _distribution(filtered, "decay_band", value_map=DECAY_BAND_LABELS)
             render_echart(
-                donut_option(severity, label="label", value="count", title="低活跃等级", color_map=SEVERITY_DISPLAY_COLORS),
+                donut_option(severity, label="label", value="count", title="活跃等级", color_map=SEVERITY_DISPLAY_COLORS),
                 key="chart_act_severity",
                 height=330,
             )
@@ -91,7 +100,7 @@ def render_activation_page(data: dict[str, object]) -> None:
 
         activity = _activity_windows(filtered)
         render_echart(
-            simple_bar_option(activity, x="window", y="txn_count", title="1/2/3月交易频次", color=PALETTE["cyan"]),
+            simple_bar_option(activity, x="window", y="txn_count", title="2026 Q1 月度交易金额", color=PALETTE["cyan"]),
             key="chart_act_windows",
             height=330,
         )
@@ -105,7 +114,7 @@ def render_activation_page(data: dict[str, object]) -> None:
                 area.head(20),
                 label="geo_reporting_name",
                 value="low_activity_count",
-                title="低活跃区域排名",
+                title="下滑区域排名",
                 color=PALETTE["red"],
             ),
             key="chart_act_area_rank",
@@ -130,9 +139,12 @@ def render_activation_page(data: dict[str, object]) -> None:
                 "nz_geo_area",
                 "nz_business_cluster",
                 "mcc_major_industry",
-                "trade_cnt_prev_3m",
-                "trade_cnt_prev_2m",
+                "trade_amt_prev_1m",
+                "trade_amt_prev_2m",
+                "trade_amt_prev_3m",
                 "trade_cnt_prev_1m",
+                "trade_cnt_prev_2m",
+                "trade_cnt_prev_3m",
                 "decay_band",
                 "priority_label",
                 "address",
@@ -142,7 +154,7 @@ def render_activation_page(data: dict[str, object]) -> None:
 
 
 def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
-    st.sidebar.subheader("活跃低洼筛选")
+    st.sidebar.subheader("活跃监测筛选")
     filtered = df
 
     selected_country = mapped_multiselect_filter("国家", filtered, "geo_country", key="act_country", value_map=COUNTRY_LABELS)
@@ -154,7 +166,7 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     for label, column, key in (
         ("机构", "institution_name", "act_institution"),
         ("行业", "mcc_major_industry", "act_industry"),
-        ("低活跃等级", "decay_band", "act_severity"),
+        ("活跃等级", "decay_band", "act_severity"),
     ):
         if column == "decay_band":
             selected = mapped_multiselect_filter(label, filtered, column, key=key, value_map=DECAY_BAND_LABELS)
@@ -259,6 +271,46 @@ def _with_priority_label(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _with_amount_decline_band(df: pd.DataFrame) -> pd.DataFrame:
+    required = {"trade_amt_prev_3m", "trade_amt_prev_2m", "trade_amt_prev_1m"}
+    if not required.issubset(df.columns):
+        return df
+    out = df.copy()
+    bands: list[str] = []
+    scores: list[float] = []
+    for row in out.to_dict("records"):
+        band, score = _classify_amount_decline(
+            mar=float(row.get("trade_amt_prev_3m") or 0),
+            feb=float(row.get("trade_amt_prev_2m") or 0),
+            jan=float(row.get("trade_amt_prev_1m") or 0),
+        )
+        bands.append(band)
+        scores.append(score)
+    out["decay_band"] = bands
+    out["activity_decay_score"] = scores
+    out["eligible_low_activity_flag"] = out["trade_amt_prev_3m"].fillna(0).astype(float) > 0
+    return out
+
+
+def _classify_amount_decline(*, mar: float, feb: float, jan: float) -> tuple[str, float]:
+    if mar <= 0:
+        return "stable", 0.0
+    if feb > 0:
+        ratio = jan / feb
+        if jan == 0:
+            return "severe", 1.0
+        if ratio <= 0.35:
+            return "high", 0.82
+        if ratio <= 0.7:
+            return "medium", 0.58
+        return "stable", 0.2
+    if jan == 0:
+        return "severe", 0.92
+    if jan <= mar * 0.5:
+        return "medium", 0.52
+    return "stable", 0.2
+
+
 def _distribution(df: pd.DataFrame, column: str, *, value_map: dict[str, str] | None = None) -> pd.DataFrame:
     if column not in df.columns:
         return pd.DataFrame(columns=["label", "count"])
@@ -273,9 +325,9 @@ def _distribution(df: pd.DataFrame, column: str, *, value_map: dict[str, str] | 
 def _activity_windows(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"window": WINDOW_LABELS["prev_3m"], "txn_count": sum_number(df, "trade_cnt_prev_3m")},
-            {"window": WINDOW_LABELS["prev_2m"], "txn_count": sum_number(df, "trade_cnt_prev_2m")},
-            {"window": WINDOW_LABELS["prev_1m"], "txn_count": sum_number(df, "trade_cnt_prev_1m")},
+            {"window": WINDOW_LABELS["prev_1m"], "txn_count": sum_number(df, "trade_amt_prev_1m")},
+            {"window": WINDOW_LABELS["prev_2m"], "txn_count": sum_number(df, "trade_amt_prev_2m")},
+            {"window": WINDOW_LABELS["prev_3m"], "txn_count": sum_number(df, "trade_amt_prev_3m")},
         ]
     )
 

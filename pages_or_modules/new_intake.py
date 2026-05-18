@@ -38,7 +38,7 @@ def render_new_intake_page(data: dict[str, object]) -> None:
     st.header("新进件")
     st.caption("进件月口径：激活表示商户在接入后 30 天内产生交易。")
     st.info(
-        "默认视图：最近 6 个进件月，已排除振兴商户和线上商户；如需查看完整口径，可在左侧筛选器调整。"
+        "默认视图：最近 6 个进件月，已排除圳兴商户和线上商户；如需查看完整口径，可在左侧筛选器调整。"
     )
 
     filtered = _sidebar_filters(rows)
@@ -153,7 +153,7 @@ def render_new_intake_page(data: dict[str, object]) -> None:
 
 def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     st.sidebar.subheader("新进件筛选")
-    st.sidebar.caption("默认：最近 6 个进件月，排除振兴商户和线上商户。")
+    st.sidebar.caption("默认：最近 6 个进件月，排除圳兴商户和线上商户。")
     filtered = df
 
     months = _month_options(df)
@@ -175,11 +175,11 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     filtered = _apply_geo_filters(filtered)
 
     zhenxing = st.sidebar.selectbox(
-        "振兴商户",
-        ("全部", "只看振兴", "排除振兴"),
+        "圳兴商户",
+        ("全部", "只看圳兴", "排除圳兴"),
         index=2,
         key="ni_zhenxing_default_exclude",
-        help="默认从新进件工作视图中排除振兴商户。",
+        help="默认从新进件工作视图中排除圳兴商户。",
     )
     if "is_zhenxing" in filtered.columns:
         filtered = _apply_zhenxing_scope(filtered, zhenxing)
@@ -370,9 +370,9 @@ def _apply_zhenxing_scope(df: pd.DataFrame, scope: str) -> pd.DataFrame:
     if "is_zhenxing" not in df.columns:
         return df
     values = df["is_zhenxing"].fillna("").astype(str)
-    if scope == "只看振兴":
+    if scope == "只看圳兴":
         return df[values == "1"]
-    if scope == "排除振兴":
+    if scope == "排除圳兴":
         return df[values == "0"]
     return df
 

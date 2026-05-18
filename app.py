@@ -18,7 +18,7 @@ st.set_page_config(
 def main() -> None:
     _apply_brand_theme()
     st.title("ANZ BI 门户")
-    st.caption("新进件与活跃低洼 BI")
+    st.caption("新进件与活跃监测 BI")
 
     try:
         project = load_project_data()
@@ -31,7 +31,7 @@ def main() -> None:
     st.sidebar.header("BI 导航")
     page = st.sidebar.radio(
         "页面",
-        ("新进件", "活跃低洼"),
+        ("新进件", "活跃监测"),
         label_visibility="collapsed",
     )
     st.sidebar.caption(

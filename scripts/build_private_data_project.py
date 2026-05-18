@@ -105,10 +105,10 @@ ACTIVATION_FIELDS = [
 ]
 
 ACTIVATION_PRIORITY_LABELS = {
-    "severe": "优先铺设",
-    "high": "重点铺设",
-    "medium": "机会铺设",
-    "stable": "维护经营",
+    "severe": "严重下滑",
+    "high": "明显下滑",
+    "medium": "稍微下滑",
+    "stable": "稳定",
 }
 
 

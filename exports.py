@@ -71,7 +71,7 @@ ACTIVATION_PROVIDER_COLUMNS = [
     "地理展示名称",
     "NZ地理片区",
     "NZ Cluster",
-    "铺设优先级",
+    "服务商跟进级别",
     "详细地址",
     "行业",
 ]
@@ -173,7 +173,7 @@ def activation_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
             "地理展示名称": _col(rows, "geo_reporting_name"),
             "NZ地理片区": _col(rows, "nz_geo_area"),
             "NZ Cluster": _col(rows, "nz_business_cluster"),
-            "铺设优先级": _first_text(rows, ["priority_label", "decay_band"]),
+            "服务商跟进级别": _first_text(rows, ["priority_label", "decay_band"]),
             "详细地址": _first_text(rows, ["address", "normalized_address"]),
             "行业": _first_text(rows, ["mcc_major_industry", "mcc_industry", "mcc_name", "mcc"]),
         }

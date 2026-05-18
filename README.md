@@ -59,11 +59,11 @@ Each BI page has two filtered exports:
 The New Intake page opens as an operational working view:
 
 - cohort month range defaults to the latest 6 available months
-- `Zhenxing` defaults to `Exclude Zhenxing`
-- `Online scope` defaults to `Exclude ONLINE`
+- `圳兴商户` defaults to `排除圳兴`
+- `线上渠道` defaults to `排除线上`
 
 These are UI defaults only. The underlying private data still contains the full reviewed
-New Intake contract, and users can include Zhenxing or ONLINE again from the sidebar.
+New Intake contract, and users can include 圳兴 or ONLINE again from the sidebar.
 
 For Streamlit Cloud, configure secrets:
 

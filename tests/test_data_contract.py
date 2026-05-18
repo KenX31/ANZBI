@@ -29,6 +29,11 @@ from pages_or_modules.new_intake import (
     _latest_month,
     _month_options,
 )
+from pages_or_modules.activation_low_activity import (
+    _activity_windows,
+    _classify_amount_decline,
+    _with_amount_decline_band,
+)
 from scripts.build_private_data_project import _new_intake_source_period
 
 
@@ -107,7 +112,7 @@ def test_activation_provider_export_excludes_internal_ids() -> None:
                 "candidate_rank": 8,
                 "merchant_name": "Demo Merchant",
                 "business_city": "Auckland",
-                "priority_label": "优先铺设",
+                "priority_label": "严重下滑",
                 "address": "Demo address",
                 "mcc_major_industry": "餐饮类",
             }
@@ -118,6 +123,7 @@ def test_activation_provider_export_excludes_internal_ids() -> None:
     assert "merchant_id" not in provider.columns
     assert "institution_id" not in provider.columns
     assert "candidate_rank" not in provider.columns
+    assert "服务商跟进级别" in provider.columns
     assert "merchant_id" in internal.columns
     assert "candidate_rank" in internal.columns
 
@@ -198,9 +204,40 @@ def test_new_intake_default_scope_excludes_online_and_zhenxing() -> None:
         }
     )
 
-    scoped = _apply_zhenxing_scope(_apply_online_scope(rows, ONLINE_SCOPE_EXCLUDE), "排除振兴")
+    scoped = _apply_zhenxing_scope(_apply_online_scope(rows, ONLINE_SCOPE_EXCLUDE), "排除圳兴")
 
     assert scoped["merchant_id"].tolist() == ["offline"]
+
+
+def test_activation_monitoring_uses_q1_amount_decline_bands() -> None:
+    rows = pd.DataFrame(
+        [
+            {"merchant_id": "stable", "trade_amt_prev_3m": 100, "trade_amt_prev_2m": 100, "trade_amt_prev_1m": 80},
+            {"merchant_id": "medium", "trade_amt_prev_3m": 100, "trade_amt_prev_2m": 100, "trade_amt_prev_1m": 60},
+            {"merchant_id": "high", "trade_amt_prev_3m": 100, "trade_amt_prev_2m": 100, "trade_amt_prev_1m": 20},
+            {"merchant_id": "severe", "trade_amt_prev_3m": 100, "trade_amt_prev_2m": 100, "trade_amt_prev_1m": 0},
+        ]
+    )
+
+    monitored = _with_amount_decline_band(rows)
+
+    assert monitored["decay_band"].tolist() == ["stable", "medium", "high", "severe"]
+    assert monitored["eligible_low_activity_flag"].tolist() == [True, True, True, True]
+    assert _classify_amount_decline(mar=0, feb=100, jan=0) == ("stable", 0.0)
+
+
+def test_activation_activity_windows_are_q1_amounts_in_calendar_order() -> None:
+    rows = pd.DataFrame(
+        [
+            {"trade_amt_prev_1m": 10, "trade_amt_prev_2m": 20, "trade_amt_prev_3m": 30},
+            {"trade_amt_prev_1m": 1, "trade_amt_prev_2m": 2, "trade_amt_prev_3m": 3},
+        ]
+    )
+
+    windows = _activity_windows(rows)
+
+    assert windows["window"].tolist() == ["2026.1", "2026.2", "2026.3"]
+    assert windows["txn_count"].tolist() == [11, 22, 33]
 
 
 def test_reporting_geography_keeps_country_specific_levels() -> None:

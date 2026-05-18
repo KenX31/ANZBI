@@ -22,16 +22,16 @@ ACTIVE_30D_LABELS = {
 }
 
 DECAY_BAND_LABELS = {
-    "high": "高低活跃",
-    "medium": "中低活跃",
-    "severe": "严重低活跃",
+    "high": "明显下滑",
+    "medium": "稍微下滑",
+    "severe": "严重下滑",
     "stable": "稳定",
 }
 
 WINDOW_LABELS = {
-    "prev_3m": "前第3个月",
-    "prev_2m": "前第2个月",
-    "prev_1m": "最近1个月",
+    "prev_1m": "2026.1",
+    "prev_2m": "2026.2",
+    "prev_3m": "2026.3",
 }
 
 COLUMN_LABELS = {
@@ -41,7 +41,7 @@ COLUMN_LABELS = {
     "address": "地址",
     "candidate_rank": "候选排名",
     "channel_type": "渠道",
-    "decay_band": "低活跃等级",
+    "decay_band": "活跃等级",
     "eligible_count": "可评估商户数",
     "eligible_low_activity_flag": "可评估标记",
     "geo_city": "城市",
@@ -55,8 +55,8 @@ COLUMN_LABELS = {
     "institution_name": "机构名称",
     "institution_standard": "机构标准名",
     "intake_month": "进件月份",
-    "low_activity_count": "低活跃商户数",
-    "low_activity_ratio": "低活跃率",
+    "low_activity_count": "下滑商户数",
+    "low_activity_ratio": "下滑占比",
     "mcc_major_industry": "行业",
     "merchant_count": "商户数",
     "merchant_id": "商户MID",
@@ -64,15 +64,15 @@ COLUMN_LABELS = {
     "merchant_short_name": "商户简称",
     "nz_business_cluster": "NZ 商圈集群",
     "nz_geo_area": "NZ 地理片区",
-    "priority_label": "铺设优先级",
+    "priority_label": "服务商跟进级别",
     "scope_country": "国家",
-    "severe_count": "严重低活跃商户数",
-    "trade_cnt_prev_1m": "最近1个月交易笔数",
-    "trade_cnt_prev_2m": "前第2个月交易笔数",
-    "trade_cnt_prev_3m": "前第3个月交易笔数",
-    "trade_amt_prev_1m": "最近1个月交易金额",
-    "trade_amt_prev_2m": "前第2个月交易金额",
-    "trade_amt_prev_3m": "前第3个月交易金额",
+    "severe_count": "严重下滑商户数",
+    "trade_cnt_prev_1m": "2026.1交易笔数",
+    "trade_cnt_prev_2m": "2026.2交易笔数",
+    "trade_cnt_prev_3m": "2026.3交易笔数",
+    "trade_amt_prev_1m": "2026.1交易金额",
+    "trade_amt_prev_2m": "2026.2交易金额",
+    "trade_amt_prev_3m": "2026.3交易金额",
     "txn_amount_30d": "接入后30天交易金额",
     "txn_count": "交易笔数",
     "txn_count_30d": "接入后30天交易笔数",
