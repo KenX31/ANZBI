@@ -6,6 +6,7 @@ from auth import AuthConfigError, require_login
 from data_loader import DataLoadError, load_project_data, validate_project
 from pages_or_modules.activation_low_activity import render_activation_page
 from pages_or_modules.new_intake import render_new_intake_page
+from pages_or_modules.silent_merchants import render_silent_merchants_page
 
 
 st.set_page_config(
@@ -38,7 +39,7 @@ def main() -> None:
     st.sidebar.header("BI 导航")
     page = st.sidebar.radio(
         "页面",
-        ("新进件", "活跃监测"),
+        ("新进件", "活跃监测", "Silent Merchants"),
         label_visibility="collapsed",
     )
     st.sidebar.caption(
@@ -47,8 +48,10 @@ def main() -> None:
 
     if page == "新进件":
         render_new_intake_page(project["new_intake"])
-    else:
+    elif page == "活跃监测":
         render_activation_page(project["activation_low_activity"])
+    else:
+        render_silent_merchants_page(project["silent_merchants"])
 
 
 def _apply_brand_theme() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 import sys
 from pathlib import Path
 
@@ -27,6 +28,8 @@ from exports import (
     activation_provider_export,
     new_intake_internal_export,
     new_intake_provider_export,
+    silent_merchants_internal_export,
+    silent_merchants_provider_export,
 )
 from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
@@ -45,7 +48,12 @@ from pages_or_modules.activation_low_activity import (
     _classify_frequency_decline,
     _with_frequency_decline_band,
 )
-from scripts.build_private_data_project import _new_intake_source_period
+from pages_or_modules.silent_merchants import (
+    SILENCE_TIER_ORDER,
+    _filter_access_date_range,
+    _geo_filter_specs,
+)
+from scripts.build_private_data_project import _new_intake_source_period, _silent_rows
 
 
 def test_auth_settings_auto_disabled_without_ldap_config() -> None:
@@ -237,6 +245,7 @@ def test_manifest_schema_guard_accepts_expected_versions() -> None:
                 "page_datasets": {
                     "new_intake": {"schema_version": "1.0"},
                     "activation_low_activity": {"schema_version": "1.0"},
+                    "silent_merchants": {"schema_version": "1.0"},
                 },
             }
         }
@@ -252,6 +261,7 @@ def test_manifest_schema_guard_rejects_stale_versions() -> None:
                     "page_datasets": {
                         "new_intake": {"schema_version": "0.9"},
                         "activation_low_activity": {"schema_version": "1.0"},
+                        "silent_merchants": {"schema_version": "1.0"},
                     },
                 }
             }
@@ -404,6 +414,122 @@ def test_activation_provider_export_keeps_mixed_country_specific_columns() -> No
     assert "NZ地理片区" in provider.columns
     assert provider.loc[0, "NZ地理片区"] == "Auckland Central"
     assert provider.loc[1, "州/省"] == "NSW"
+
+
+def test_silent_provider_export_excludes_internal_ids_and_uses_english_headers() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "merchant_id": "823448011",
+                "institution_id": "739553423",
+                "merchant_display_name": "Demo Merchant",
+                "institution_name": "Demo PSP",
+                "country_group": "AU",
+                "merchant_country_code": "036",
+                "state": "VIC",
+                "business_city": "Melbourne",
+                "business_suburb": "Syndal",
+                "postcode": "3149",
+                "silence_tier": "new_unactivated_180d",
+                "access_age_band": "access_180_359d",
+                "merchant_access_time": "2025-10-31 18:19:08",
+                "business_type": "OFFLINE",
+                "address": "Unit 902/108 Queens Rd",
+                "mcc_code": "0744",
+            }
+        ]
+    )
+
+    provider = silent_merchants_provider_export(rows)
+    internal = silent_merchants_internal_export(rows)
+
+    assert "merchant_id" not in provider.columns
+    assert "institution_id" not in provider.columns
+    assert provider.columns.tolist() == [
+        "Merchant Name",
+        "Country",
+        "State",
+        "City",
+        "Suburb",
+        "Postcode",
+        "Geo Reporting Name",
+        "Silence Tier",
+        "Access Age Band",
+        "Access Time",
+        "Business Type",
+        "Address",
+        "MCC Code",
+    ]
+    assert provider.loc[0, "Silence Tier"] == "New unactivated after 180 days"
+    assert "merchant_id" in internal.columns
+    assert "institution_id" in internal.columns
+    assert internal.loc[0, "merchant_id"] == "823448011"
+
+
+def test_silent_rows_preserve_ids_and_copy_stores_address_for_geo_matching() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "snapshot_ds": 20260501,
+                "country_group": "NZ",
+                "merchant_country_code": 554,
+                "merchant_id": 456789123,
+                "merchant_display_name": "Demo Store",
+                "institution_id": 123456,
+                "mcc_code": 5812,
+                "stores_address": "1 Queen Street\u00a0Auckland 1010",
+                "silence_tier": "deep_silent",
+            }
+        ]
+    )
+
+    rows = _silent_rows(raw)
+    matcher = StreamlitGeoMatcher.from_frames(
+        nz=pd.DataFrame(
+            [
+                {
+                    "Country": "NZ",
+                    "City": "Auckland",
+                    "geo_area": "Central Auckland",
+                    "Suburb": "Auckland Central",
+                    "Postcode": "1010",
+                    "business_cluster": "CBD",
+                }
+            ]
+        ),
+        au=pd.DataFrame([{"Country": "AU", "State": "NSW", "City": "Sydney", "Suburb": "Haymarket", "Postcode": "2000"}]),
+    )
+    staged = append_staging_geo_columns(rows, matcher)
+
+    assert rows.loc[0, "merchant_id"] == "456789123"
+    assert rows.loc[0, "institution_id"] == "123456"
+    assert rows.loc[0, "mcc_code"] == "5812"
+    assert "\u00a0" not in rows.loc[0, "address"]
+    assert rows.loc[0, "address"] == "1 Queen Street Auckland 1010"
+    assert staged.loc[0, "staging_city"] == "Auckland"
+    assert staged.loc[0, "staging_geo_area"] == "Central Auckland"
+
+
+def test_silent_page_helpers_sort_filter_and_keep_country_aware_geo_specs() -> None:
+    rows = pd.DataFrame(
+        [
+            {"merchant_id": "old", "merchant_access_time": "2025-05-01 10:00:00", "silence_tier": "deep_silent"},
+            {"merchant_id": "mid", "merchant_access_time": "2025-10-01 10:00:00", "silence_tier": "initial_silent"},
+            {"merchant_id": "new", "merchant_access_time": "2025-10-31 10:00:00", "silence_tier": "new_unactivated_180d"},
+        ]
+    )
+
+    filtered = _filter_access_date_range(rows, date(2025, 10, 1), date(2025, 10, 31))
+
+    assert SILENCE_TIER_ORDER == ["new_unactivated_180d", "initial_silent", "deep_silent"]
+    assert filtered["merchant_id"].tolist() == ["mid", "new"]
+    assert [spec.column for spec in _geo_filter_specs("AU")] == ["geo_state", "geo_city", "geo_suburb", "geo_postcode"]
+    assert [spec.column for spec in _geo_filter_specs("NZ")] == [
+        "geo_city",
+        "nz_geo_area",
+        "nz_business_cluster",
+        "geo_suburb",
+    ]
 
 
 def test_amount_columns_are_scaled_from_minor_units() -> None:

@@ -105,6 +105,80 @@ ACTIVATION_INTERNAL_COLUMNS = [
     "address",
 ]
 
+SILENT_PROVIDER_COLUMNS = [
+    "Merchant Name",
+    "Country",
+    "State",
+    "City",
+    "Suburb",
+    "Postcode",
+    "Geo Reporting Name",
+    "NZ Geo Area",
+    "Silence Tier",
+    "Access Age Band",
+    "Access Time",
+    "Business Type",
+    "Address",
+    "MCC Code",
+]
+
+SILENT_INTERNAL_COLUMNS = [
+    "merchant_id",
+    "institution_id",
+    "merchant_display_name",
+    "merchant_company_name",
+    "merchant_short_name",
+    "institution_name",
+    "institution_group",
+    "snapshot_ds",
+    "country_group",
+    "merchant_country_code",
+    "geo_country",
+    "geo_state",
+    "geo_city",
+    "geo_suburb",
+    "geo_postcode",
+    "geo_reporting_name",
+    "nz_geo_area",
+    "nz_business_cluster",
+    "au_service_area",
+    "business_type",
+    "mcc_code",
+    "merchant_state",
+    "stores_number",
+    "stores_address",
+    "address",
+    "website",
+    "merchant_access_time",
+    "profile_create_time",
+    "profile_modify_time",
+    "submch_manage_time",
+    "txn_count_30d",
+    "txn_amount_30d",
+    "txn_count_180d",
+    "txn_amount_180d",
+    "txn_count_360d",
+    "txn_amount_360d",
+    "txn_count_720d",
+    "txn_amount_720d",
+    "silence_tier",
+    "access_age_band",
+    "has_address_flag",
+    "field_visit_priority_scope_flag",
+    "access_recency_sort_key",
+]
+
+SILENT_TIER_LABELS = {
+    "new_unactivated_180d": "New unactivated after 180 days",
+    "initial_silent": "Initial silent",
+    "deep_silent": "Deep silent",
+}
+
+SILENT_ACCESS_AGE_LABELS = {
+    "access_180_359d": "Access 180-359 days",
+    "access_gte_360d": "Access >= 360 days",
+}
+
 
 def csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8-sig")
@@ -172,6 +246,40 @@ def activation_internal_export(rows: pd.DataFrame) -> pd.DataFrame:
     return _select_existing(rows, ACTIVATION_INTERNAL_COLUMNS, drop_empty=True)
 
 
+def silent_merchants_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
+    rows = with_reporting_geography(
+        rows,
+        country_columns=["country_group", "merchant_country_code"],
+    )
+    payload = pd.DataFrame(
+        {
+            "Merchant Name": _first_text(rows, ["merchant_display_name", "merchant_short_name", "merchant_company_name"]),
+            "Country": _col(rows, "geo_country"),
+            "State": _col(rows, "geo_state"),
+            "City": _col(rows, "geo_city"),
+            "Suburb": _col(rows, "geo_suburb"),
+            "Postcode": _col(rows, "geo_postcode"),
+            "Geo Reporting Name": _col(rows, "geo_reporting_name"),
+            "NZ Geo Area": _col(rows, "nz_geo_area"),
+            "Silence Tier": _map_values(_col(rows, "silence_tier"), SILENT_TIER_LABELS),
+            "Access Age Band": _map_values(_col(rows, "access_age_band"), SILENT_ACCESS_AGE_LABELS),
+            "Access Time": _col(rows, "merchant_access_time"),
+            "Business Type": _col(rows, "business_type"),
+            "Address": _first_text(rows, ["address", "stores_address"]),
+            "MCC Code": _col(rows, "mcc_code"),
+        }
+    )
+    return _select_nonempty(payload, SILENT_PROVIDER_COLUMNS)
+
+
+def silent_merchants_internal_export(rows: pd.DataFrame) -> pd.DataFrame:
+    rows = with_reporting_geography(
+        rows,
+        country_columns=["country_group", "merchant_country_code"],
+    )
+    return _select_existing(rows, SILENT_INTERNAL_COLUMNS, drop_empty=True)
+
+
 def _col(df: pd.DataFrame, name: str) -> pd.Series:
     if name in df.columns:
         return df[name].fillna("")
@@ -188,6 +296,10 @@ def _first_text(df: pd.DataFrame, columns: list[str]) -> pd.Series:
 
 def _active_label(values: pd.Series) -> pd.Series:
     return values.astype(str).map(lambda value: "已激活" if value in {"1", "1.0", "true", "True"} else "未激活")
+
+
+def _map_values(values: pd.Series, mapping: dict[str, str]) -> pd.Series:
+    return values.astype(str).map(lambda value: mapping.get(value, value))
 
 
 def _select_existing(df: pd.DataFrame, columns: list[str], *, drop_empty: bool = False) -> pd.DataFrame:

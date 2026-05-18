@@ -1,6 +1,6 @@
 # ANZ BI Streamlit Portal
 
-Streamlit BI portal for ANZ WeChat Pay New Intake and Activation Low-Activity analysis.
+Streamlit BI portal for ANZ WeChat Pay New Intake, Activation Low-Activity, and Silent Merchants analysis.
 
 This repository is the clean Streamlit code home for the ANZ BI portal:
 
@@ -22,6 +22,7 @@ projects/anz-bi-platform/
   processed/
     new_intake/
     activation_low_activity/
+    silent_merchants/
     shared_dimensions/
 ```
 
@@ -187,6 +188,7 @@ projects/anz-bi-platform/
   processed/
     new_intake/
     activation_low_activity/
+    silent_merchants/
     shared_dimensions/
 ```
 
@@ -195,6 +197,16 @@ entry. Future refreshes should update only the changed page folder plus the mani
 entry for that page, leaving unrelated BI pages untouched. Shared dimensions under
 `processed/shared_dimensions/` should be small contracts used by the BI app itself;
 reusable geo dimensions stay in the separate `anz-geography` project.
+
+For a page-scoped Silent Merchants refresh only:
+
+```powershell
+python scripts\build_private_data_project.py `
+  --silent-only `
+  --output-root "D:\Tencent\Data analysis\anzdata-worktree\projects\anz-bi-platform" `
+  --silent-detail "D:\Tencent\Data analysis\2026.5.18_ANZ_silent_merchants_activation\data\raw\first_600.xlsx" `
+  --silent-aggregate "D:\Tencent\Data analysis\2026.5.18_ANZ_silent_merchants_activation\data\raw\00a.xlsx"
+```
 
 ## Country-Aware Geography Contract
 
