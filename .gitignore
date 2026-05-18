@@ -1,0 +1,14 @@
+__pycache__/
+.pytest_cache/
+.streamlit/secrets.toml
+.env
+data/
+tmp/
+*.sqlite
+*.db
+*.xlsx
+*.xls
+*.csv
+*.json
+!tests/fixtures/**/*.json
+!tests/fixtures/**/*.csv
