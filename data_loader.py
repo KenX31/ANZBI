@@ -18,6 +18,8 @@ DEFAULT_LOCAL_PROJECT_ROOT = Path(r"D:\Tencent\Data analysis\anzdata-worktree\pr
 DEFAULT_LOCAL_GEO_STAGING_ROOT = Path(
     r"D:\Tencent\Data analysis\ANZ_Data_Warehouse\data\Geo_warehouse_streamlit_staging"
 )
+REMOTE_GEO_STAGING_ROOT = "processed/shared_dimensions/geo_warehouse_streamlit_staging"
+REMOTE_GEO_FALLBACK_ROOT = "processed/shared_dimensions"
 EXPECTED_SCHEMA = {
     "new_intake": "1.0",
     "activation_low_activity": "1.0",
@@ -147,19 +149,48 @@ def _load_frame(source: DataSource, relative_path: str) -> pd.DataFrame:
 
 def _load_page_rows(source: DataSource, relative_path: str) -> pd.DataFrame:
     frame = _load_frame(source, relative_path)
-    return _maybe_apply_local_geo_staging(source, frame)
+    return _maybe_apply_geo_staging(source, frame)
 
 
-def _maybe_apply_local_geo_staging(source: DataSource, frame: pd.DataFrame) -> pd.DataFrame:
-    if source.backend != "local" or source.geo_staging_root is None:
-        return frame
+def _maybe_apply_geo_staging(source: DataSource, frame: pd.DataFrame) -> pd.DataFrame:
     if "staging_geo_area" in frame.columns:
         return frame
+    matcher = _resolve_geo_matcher(source)
+    if matcher is None:
+        return frame
+    return append_staging_geo_columns(frame, matcher)
+
+
+def _resolve_geo_matcher(source: DataSource) -> StreamlitGeoMatcher | None:
+    if source.backend == "local":
+        return _local_geo_matcher(source)
+    if source.backend == "github_private":
+        return _github_geo_matcher(source)
+    return None
+
+
+def _local_geo_matcher(source: DataSource) -> StreamlitGeoMatcher | None:
+    if source.geo_staging_root is None:
+        return None
     required = ("nz_geo_dimension.csv", "au_geo_dimension.csv")
     if not all((source.geo_staging_root / name).exists() for name in required):
-        return frame
-    matcher = StreamlitGeoMatcher(source.geo_staging_root)
-    return append_staging_geo_columns(frame, matcher)
+        return None
+    return StreamlitGeoMatcher(source.geo_staging_root)
+
+
+def _github_geo_matcher(source: DataSource) -> StreamlitGeoMatcher | None:
+    for root in (REMOTE_GEO_STAGING_ROOT, REMOTE_GEO_FALLBACK_ROOT):
+        nz = _load_frame_optional(source, f"{root}/nz_geo_dimension.csv")
+        au = _load_frame_optional(source, f"{root}/au_geo_dimension.csv")
+        if nz.empty or au.empty:
+            continue
+        return StreamlitGeoMatcher.from_frames(
+            nz=nz,
+            au=au,
+            nz_rules=_load_frame_optional(source, f"{root}/nz_geo_area_rules.csv"),
+            au_rules=_load_frame_optional(source, f"{root}/au_geo_match_rules.csv"),
+        )
+    return None
 
 
 def _load_frame_optional(source: DataSource, relative_path: str) -> pd.DataFrame:

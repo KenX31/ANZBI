@@ -48,17 +48,44 @@ class GeoMatchResult:
 
 
 class StreamlitGeoMatcher:
-    def __init__(self, staging_dir: Path):
+    def __init__(
+        self,
+        staging_dir: Path | None = None,
+        *,
+        nz: pd.DataFrame | None = None,
+        au: pd.DataFrame | None = None,
+        nz_rules: pd.DataFrame | None = None,
+        au_rules: pd.DataFrame | None = None,
+    ):
         self.staging_dir = staging_dir
-        self.nz = _read_csv(staging_dir / "nz_geo_dimension.csv")
-        self.au = _read_csv(staging_dir / "au_geo_dimension.csv")
-        self.nz_rules = _read_csv(staging_dir / "nz_geo_area_rules.csv")
-        self.au_rules = _read_csv(staging_dir / "au_geo_match_rules.csv")
+        self.nz = _clean_frame(nz) if nz is not None else _read_csv(_path(staging_dir, "nz_geo_dimension.csv"))
+        self.au = _clean_frame(au) if au is not None else _read_csv(_path(staging_dir, "au_geo_dimension.csv"))
+        self.nz_rules = (
+            _clean_frame(nz_rules)
+            if nz_rules is not None
+            else _read_csv(_path(staging_dir, "nz_geo_area_rules.csv"))
+        )
+        self.au_rules = (
+            _clean_frame(au_rules)
+            if au_rules is not None
+            else _read_csv(_path(staging_dir, "au_geo_match_rules.csv"))
+        )
         self.nz_by_postcode = _by_postcode(self.nz, "Postcode")
         self.au_by_postcode = _by_postcode(self.au, "Postcode")
         self.au_manual_rules = _manual_au_rules(self.au_rules)
         self.nz_aliases = _suburb_aliases(self.nz_rules, country="NZ")
         self.au_aliases = _suburb_aliases(self.au, country="AU")
+
+    @classmethod
+    def from_frames(
+        cls,
+        *,
+        nz: pd.DataFrame,
+        au: pd.DataFrame,
+        nz_rules: pd.DataFrame | None = None,
+        au_rules: pd.DataFrame | None = None,
+    ) -> "StreamlitGeoMatcher":
+        return cls(nz=nz, au=au, nz_rules=nz_rules, au_rules=au_rules)
 
     def match_row(self, row: dict[str, Any]) -> GeoMatchResult:
         country = _country(row)
@@ -237,10 +264,20 @@ def compare_geo_coverage(rows: pd.DataFrame, matcher: StreamlitGeoMatcher) -> di
     }
 
 
-def _read_csv(path: Path) -> pd.DataFrame:
-    if not path.exists():
+def _path(root: Path | None, filename: str) -> Path | None:
+    return root / filename if root is not None else None
+
+
+def _read_csv(path: Path | None) -> pd.DataFrame:
+    if path is None or not path.exists():
         return pd.DataFrame()
     return pd.read_csv(path, dtype=str).fillna("")
+
+
+def _clean_frame(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    return df.astype(str).fillna("")
 
 
 def _by_postcode(df: pd.DataFrame, column: str) -> dict[str, list[dict[str, Any]]]:

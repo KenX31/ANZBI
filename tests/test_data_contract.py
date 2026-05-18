@@ -18,6 +18,7 @@ from exports import (
     new_intake_internal_export,
     new_intake_provider_export,
 )
+from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
 from scripts.build_private_data_project import _new_intake_source_period
 
@@ -162,6 +163,36 @@ def test_reporting_geography_keeps_country_specific_levels() -> None:
         "geo_suburb",
         "geo_postcode",
     ]
+
+
+def test_geo_matcher_can_use_private_repo_frames() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "analysis_country": "NZ",
+                "merchant_short_name": "Demo",
+                "store_address": "1 Queen Street, Auckland 1010",
+            }
+        ]
+    )
+    matcher = StreamlitGeoMatcher.from_frames(
+        nz=pd.DataFrame(
+            [
+                {
+                    "Country": "NZ",
+                    "City": "Auckland",
+                    "geo_area": "Central Auckland",
+                    "Suburb": "Auckland Central",
+                    "Postcode": "1010",
+                    "business_cluster": "CBD",
+                }
+            ]
+        ),
+        au=pd.DataFrame([{"Country": "AU", "State": "NSW", "City": "Sydney", "Suburb": "Haymarket", "Postcode": "2000"}]),
+    )
+    staged = append_staging_geo_columns(rows, matcher)
+    assert staged.loc[0, "staging_geo_area"] == "Central Auckland"
+    assert staged.loc[0, "staging_business_cluster"] == "CBD"
 
 
 def test_echarts_option_builders_return_core_shapes() -> None:

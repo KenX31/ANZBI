@@ -146,6 +146,9 @@ projects/anz-bi-platform/
 
 The app reads prepared page rows from `KenX31/anzdata`; those rows should include
 the reviewed `staging_*` geography columns after the private data package is rebuilt.
+If the deployed rows do not yet include `staging_*` columns, `DATA_BACKEND=github_private`
+will try to load the reviewed geo dimension CSVs from `processed/shared_dimensions`
+and apply the same matcher at runtime.
 
 ## Streamlit Geo Staging Check
 
