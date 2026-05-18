@@ -98,6 +98,61 @@ def combo_line_bar_option(
     }
 
 
+def combo_bar_count_line_option(
+    df: pd.DataFrame,
+    *,
+    x: str,
+    bar_y: str,
+    line_y: str,
+    title: str,
+    bar_name: str,
+    line_name: str,
+) -> dict[str, Any]:
+    source = [
+        {
+            x: _json_value(row.get(x)),
+            bar_y: _json_value(row.get(bar_y)),
+            line_y: _json_value(row.get(line_y)),
+        }
+        for row in df.to_dict("records")
+    ]
+    return _base_option(title) | {
+        "dataset": {"source": source},
+        "legend": {"top": 8, "right": 12, "textStyle": {"color": TEXT_MUTED}},
+        "xAxis": _category_axis(),
+        "yAxis": [
+            _value_axis(name=bar_name),
+            {
+                "type": "value",
+                "name": line_name,
+                "axisLabel": {"color": TEXT_MUTED},
+                "splitLine": {"show": False},
+                "axisLine": {"lineStyle": {"color": BORDER}},
+            },
+        ],
+        "series": [
+            {
+                "name": bar_name,
+                "type": "bar",
+                "encode": {"x": x, "y": bar_y},
+                "itemStyle": {"color": PALETTE["cyan"], "borderRadius": [5, 5, 0, 0]},
+                "barMaxWidth": 30,
+            },
+            {
+                "name": line_name,
+                "type": "line",
+                "yAxisIndex": 1,
+                "encode": {"x": x, "y": line_y},
+                "smooth": True,
+                "symbolSize": 8,
+                "lineStyle": {"width": 4, "color": PALETTE["green"]},
+                "itemStyle": {"color": PALETTE["green"], "borderColor": PALETTE["forest"], "borderWidth": 2},
+                "label": {"show": True, "position": "top", "color": TEXT_MUTED},
+            },
+        ],
+    }
+
+
 def stacked_bar_option(
     df: pd.DataFrame,
     *,

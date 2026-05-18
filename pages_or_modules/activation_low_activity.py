@@ -6,10 +6,10 @@ import streamlit as st
 from charts import (
     PALETTE,
     SEVERITY_COLORS,
+    combo_bar_count_line_option,
     donut_option,
     horizontal_bar_option,
     render_echart,
-    simple_bar_option,
     treemap_option,
 )
 from exports import activation_internal_export, activation_provider_export, csv_bytes
@@ -101,7 +101,15 @@ def render_activation_page(data: dict[str, object]) -> None:
 
         activity = _activity_windows(filtered)
         render_echart(
-            simple_bar_option(activity, x="window", y="txn_count", title="2026 Q1 月度交易频次", color=PALETTE["cyan"]),
+            combo_bar_count_line_option(
+                activity,
+                x="window",
+                bar_y="txn_count",
+                line_y="active_merchant_count",
+                title="2026 Q1 月度交易频次与活跃商户数",
+                bar_name="交易频次",
+                line_name="活跃商户数",
+            ),
             key="chart_act_windows",
             height=330,
         )
@@ -326,11 +334,29 @@ def _distribution(df: pd.DataFrame, column: str, *, value_map: dict[str, str] | 
 def _activity_windows(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         [
-            {"window": WINDOW_LABELS["prev_3m"], "txn_count": sum_number(df, "trade_cnt_prev_3m")},
-            {"window": WINDOW_LABELS["prev_2m"], "txn_count": sum_number(df, "trade_cnt_prev_2m")},
-            {"window": WINDOW_LABELS["prev_1m"], "txn_count": sum_number(df, "trade_cnt_prev_1m")},
+            {
+                "window": WINDOW_LABELS["prev_3m"],
+                "txn_count": sum_number(df, "trade_cnt_prev_3m"),
+                "active_merchant_count": _active_merchant_count(df, "trade_cnt_prev_3m"),
+            },
+            {
+                "window": WINDOW_LABELS["prev_2m"],
+                "txn_count": sum_number(df, "trade_cnt_prev_2m"),
+                "active_merchant_count": _active_merchant_count(df, "trade_cnt_prev_2m"),
+            },
+            {
+                "window": WINDOW_LABELS["prev_1m"],
+                "txn_count": sum_number(df, "trade_cnt_prev_1m"),
+                "active_merchant_count": _active_merchant_count(df, "trade_cnt_prev_1m"),
+            },
         ]
     )
+
+
+def _active_merchant_count(df: pd.DataFrame, column: str) -> int:
+    if column not in df.columns or df.empty:
+        return 0
+    return int((pd.to_numeric(df[column], errors="coerce").fillna(0) > 0).sum())
 
 
 def _area_rollup(df: pd.DataFrame) -> pd.DataFrame:

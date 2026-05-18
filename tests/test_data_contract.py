@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from charts import combo_line_bar_option, donut_option, horizontal_bar_option
+from charts import combo_bar_count_line_option
 from data_loader import DataLoadError, _normalize_amount_units, _read_csv_text, validate_project
 from exports import (
     activation_internal_export,
@@ -238,6 +239,30 @@ def test_activation_activity_windows_are_q1_frequency_in_calendar_order() -> Non
 
     assert windows["window"].tolist() == ["2026.1", "2026.2", "2026.3"]
     assert windows["txn_count"].tolist() == [33, 22, 11]
+    assert windows["active_merchant_count"].tolist() == [2, 2, 2]
+
+
+def test_activation_combo_chart_uses_bar_and_line_axes() -> None:
+    rows = pd.DataFrame(
+        [
+            {"window": "2026.1", "txn_count": 230008, "active_merchant_count": 5000},
+            {"window": "2026.2", "txn_count": 275000, "active_merchant_count": 4259},
+        ]
+    )
+
+    option = combo_bar_count_line_option(
+        rows,
+        x="window",
+        bar_y="txn_count",
+        line_y="active_merchant_count",
+        title="2026 Q1",
+        bar_name="交易频次",
+        line_name="活跃商户数",
+    )
+
+    assert option["series"][0]["type"] == "bar"
+    assert option["series"][1]["type"] == "line"
+    assert option["series"][1]["yAxisIndex"] == 1
 
 
 def test_reporting_geography_keeps_country_specific_levels() -> None:
