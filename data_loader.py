@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import pandas as pd
 import requests
@@ -51,7 +53,9 @@ def _secret_or_env(name: str, default: str = "") -> str:
 
 
 def resolve_data_source() -> DataSource:
-    backend = _secret_or_env("DATA_BACKEND", "local")
+    backend = _secret_or_env("DATA_BACKEND", "").strip().lower()
+    if not backend:
+        backend = "local" if DEFAULT_LOCAL_PROJECT_ROOT.exists() else "github_private"
     local_root = _secret_or_env("LOCAL_DATA_ROOT", "")
     geo_staging_root = _secret_or_env("LOCAL_GEO_STAGING_ROOT", "")
     resolved_local_root = Path(local_root).expanduser() if local_root else None
@@ -222,16 +226,59 @@ def _local_path(source: DataSource, relative_path: str) -> Path:
 
 
 def _read_github_text(source: DataSource, relative_path: str) -> str:
-    url = (
-        f"https://raw.githubusercontent.com/{source.github_repo}/"
-        f"{source.github_ref}/projects/{source.github_project}/{relative_path}"
-    )
-    headers = {"Accept": "application/vnd.github.raw"}
-    if source.github_token:
-        headers["Authorization"] = f"Bearer {source.github_token}"
-    response = requests.get(url, headers=headers, timeout=30)
-    if response.status_code == 404:
-        raise DataLoadError(f"Private data file not found on GitHub: {relative_path}")
-    if response.status_code >= 400:
-        raise DataLoadError(f"GitHub data request failed for {relative_path}: HTTP {response.status_code}")
-    return response.text
+    if not source.github_token:
+        raise DataLoadError(
+            "DATA_GITHUB_TOKEN is required when DATA_BACKEND=github_private. "
+            "Create a GitHub token with read-only Contents access to KenX31/anzdata "
+            "and add it in Streamlit app Secrets."
+        )
+
+    github_path = f"projects/{source.github_project}/{relative_path}"
+    url = f"https://api.github.com/repos/{source.github_repo}/contents/{quote(github_path, safe='/')}"
+    headers = {
+        "Accept": "application/vnd.github.raw+json",
+        "Authorization": f"Bearer {source.github_token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    response = requests.get(url, headers=headers, params={"ref": source.github_ref}, timeout=30)
+    if response.ok:
+        return _github_response_text(source, response, relative_path)
+
+    status = response.status_code
+    if status in {401, 403}:
+        raise DataLoadError(
+            f"GitHub data request was denied for {relative_path}: HTTP {status}. "
+            "Check DATA_GITHUB_TOKEN, token expiry, and read permission for KenX31/anzdata."
+        )
+    if status == 404:
+        raise DataLoadError(
+            f"Private data file not found on GitHub: {relative_path}. "
+            f"Checked repo={source.github_repo}, ref={source.github_ref}, "
+            f"project={source.github_project}."
+        )
+    raise DataLoadError(f"GitHub data request failed for {relative_path}: HTTP {status}")
+
+
+def _github_response_text(source: DataSource, response: requests.Response, relative_path: str) -> str:
+    content_type = response.headers.get("content-type", "")
+    if "application/json" not in content_type:
+        return response.text
+
+    payload = response.json()
+    if isinstance(payload, dict):
+        encoded = str(payload.get("content") or "").strip()
+        if encoded:
+            return base64.b64decode(encoded).decode("utf-8-sig")
+        download_url = payload.get("download_url")
+        if download_url:
+            headers = {
+                "Authorization": f"Bearer {source.github_token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+            raw = requests.get(str(download_url), headers=headers, timeout=30)
+            if raw.ok:
+                return raw.text
+            raise DataLoadError(
+                f"GitHub raw download failed for {relative_path}: HTTP {raw.status_code}"
+            )
+    raise DataLoadError(f"GitHub returned an unexpected response for {relative_path}.")

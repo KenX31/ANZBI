@@ -64,6 +64,10 @@ DATA_PROJECT = "anz-bi-platform"
 DATA_GITHUB_TOKEN = "..."
 ```
 
+`DATA_GITHUB_TOKEN` should be a GitHub fine-grained token or classic PAT that can
+read repository contents from the private `KenX31/anzdata` repo. Keep it only in
+Streamlit Secrets; never commit it to this code repository.
+
 ## Build Private Data Package
 
 From this repo:
