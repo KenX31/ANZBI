@@ -19,6 +19,12 @@ from geography import country_scope, sidebar_geo_filter_specs, with_reporting_ge
 from metrics import count_flag, format_int, format_pct, rate, sum_number
 
 
+DEFAULT_MONTH_WINDOW = 6
+ONLINE_SCOPE_EXCLUDE = "Exclude ONLINE"
+ONLINE_SCOPE_ALL = "All channels"
+ONLINE_SCOPE_ONLY = "Only ONLINE"
+
+
 def render_new_intake_page(data: dict[str, object]) -> None:
     rows = with_reporting_geography(
         data["rows"].copy(),  # type: ignore[index, union-attr]
@@ -30,13 +36,16 @@ def render_new_intake_page(data: dict[str, object]) -> None:
 
     st.header("New Intake")
     st.caption("Cohort view: activation means the merchant traded within 30 days after onboarding.")
+    st.info(
+        "默认视图：最近 6 个 cohort 月，已排除 Zhenxing 和 ONLINE；如需查看完整口径，可在左侧筛选器调整。"
+    )
 
     filtered = _sidebar_filters(rows)
     filtered = _normalize_numeric(filtered)
 
     total = len(filtered)
     active = count_flag(filtered, "active_30d_flag", 1)
-    latest_month = filtered["intake_month"].max() if "intake_month" in filtered.columns and total else "-"
+    latest_month = _latest_month(filtered) if total else "-"
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Merchants", format_int(total))
@@ -145,20 +154,20 @@ def render_new_intake_page(data: dict[str, object]) -> None:
 
 def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     st.sidebar.subheader("New Intake Filters")
+    st.sidebar.caption("Default: latest 6 cohort months, excluding Zhenxing and ONLINE.")
     filtered = df
 
-    months = options(df, "intake_month")
+    months = _month_options(df)
     if months:
+        default_start, default_end = _default_month_range(months)
         start, end = st.sidebar.select_slider(
             "Cohort month range",
             options=months,
-            value=(months[0], months[-1]),
-            key="ni_month_range",
+            value=(default_start, default_end),
+            key="ni_month_range_recent6_v2",
+            help="Default range is the latest 6 available cohort months.",
         )
-        filtered = filtered[
-            (filtered["intake_month"].astype(str) >= str(start))
-            & (filtered["intake_month"].astype(str) <= str(end))
-        ]
+        filtered = _filter_month_range(filtered, start, end)
 
     selected_country = multiselect_filter("Country", filtered, "geo_country", key="ni_country")
     if selected_country:
@@ -166,9 +175,28 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
 
     filtered = _apply_geo_filters(filtered)
 
+    zhenxing = st.sidebar.selectbox(
+        "Zhenxing",
+        ("All", "Only Zhenxing", "Exclude Zhenxing"),
+        index=2,
+        key="ni_zhenxing_default_exclude",
+        help="Default excludes Zhenxing merchants from the New Intake working view.",
+    )
+    if "is_zhenxing" in filtered.columns:
+        filtered = _apply_zhenxing_scope(filtered, zhenxing)
+
+    online_scope = st.sidebar.selectbox(
+        "Online scope",
+        (ONLINE_SCOPE_EXCLUDE, ONLINE_SCOPE_ALL, ONLINE_SCOPE_ONLY),
+        index=0,
+        key="ni_online_scope_default_exclude",
+        help="Default excludes channel_type=ONLINE. Switch to All channels to include ONLINE.",
+    )
+    filtered = _apply_online_scope(filtered, online_scope)
+
     for label, column, key in (
         ("Institution", "institution_standard", "ni_institution"),
-        ("Channel", "channel_type", "ni_channel"),
+        ("Channel", "channel_type", "ni_channel_scope"),
         ("Industry", "mcc_major_industry", "ni_industry"),
     ):
         selected = multiselect_filter(label, filtered, column, key=key)
@@ -180,13 +208,6 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
         filtered = filtered[filtered["active_30d_flag"].astype(str) == "1"]
     elif status == "Inactive":
         filtered = filtered[filtered["active_30d_flag"].astype(str) == "0"]
-
-    zhenxing = st.sidebar.selectbox("Zhenxing", ("All", "Only Zhenxing", "Exclude Zhenxing"), key="ni_zhenxing")
-    if "is_zhenxing" in filtered.columns:
-        if zhenxing == "Only Zhenxing":
-            filtered = filtered[filtered["is_zhenxing"].astype(str) == "1"]
-        elif zhenxing == "Exclude Zhenxing":
-            filtered = filtered[filtered["is_zhenxing"].astype(str) == "0"]
 
     query = st.sidebar.text_input("Merchant / institution keyword", key="ni_query")
     return apply_text_filter(
@@ -275,6 +296,85 @@ def _normalize_numeric(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _month_options(df: pd.DataFrame) -> list[str]:
+    if "intake_month" not in df.columns:
+        return []
+    values = df["intake_month"].dropna().astype(str)
+    months = {_month_label(value) for value in values if value.strip() and value.strip().lower() != "nan"}
+    months = {month for month in months if month}
+    return sorted(months, key=_month_sort_key)
+
+
+def _default_month_range(months: list[str], window: int = DEFAULT_MONTH_WINDOW) -> tuple[str, str]:
+    start_index = max(0, len(months) - window)
+    return months[start_index], months[-1]
+
+
+def _filter_month_range(df: pd.DataFrame, start: object, end: object) -> pd.DataFrame:
+    if "intake_month" not in df.columns:
+        return df
+    start_key = _month_period_key(start)
+    end_key = _month_period_key(end)
+    if start_key > end_key:
+        start_key, end_key = end_key, start_key
+    mask = df["intake_month"].fillna("").astype(str).map(lambda value: start_key <= _month_period_key(value) <= end_key)
+    return df[mask]
+
+
+def _month_sort_key(value: object) -> tuple[int, int, str]:
+    text = str(value or "").strip()
+    normalized = text.replace("-", ".").replace("/", ".")
+    parts = normalized.split(".")
+    if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+        year = int(parts[0])
+        month_text = parts[1]
+        # Current source contract is YYYY.MM. If a previous CSV inference turned
+        # 2025.10 into 2025.1, treat the non-padded .1 as October.
+        month = 10 if month_text == "1" else int(month_text)
+        if 1 <= month <= 12:
+            return year, month, text
+    return 9999, 99, text
+
+
+def _month_label(value: object) -> str:
+    year, month, _ = _month_sort_key(value)
+    if year == 9999:
+        return str(value or "").strip()
+    return f"{year}.{month:02d}"
+
+
+def _month_period_key(value: object) -> tuple[int, int]:
+    year, month, _ = _month_sort_key(value)
+    return year, month
+
+
+def _latest_month(df: pd.DataFrame) -> str:
+    months = _month_options(df)
+    return months[-1] if months else "-"
+
+
+def _apply_online_scope(df: pd.DataFrame, scope: str) -> pd.DataFrame:
+    if "channel_type" not in df.columns:
+        return df
+    channel = df["channel_type"].fillna("").astype(str).str.upper()
+    if scope == ONLINE_SCOPE_EXCLUDE:
+        return df[channel != "ONLINE"]
+    if scope == ONLINE_SCOPE_ONLY:
+        return df[channel == "ONLINE"]
+    return df
+
+
+def _apply_zhenxing_scope(df: pd.DataFrame, scope: str) -> pd.DataFrame:
+    if "is_zhenxing" not in df.columns:
+        return df
+    values = df["is_zhenxing"].fillna("").astype(str)
+    if scope == "Only Zhenxing":
+        return df[values == "1"]
+    if scope == "Exclude Zhenxing":
+        return df[values == "0"]
+    return df
+
+
 def _monthly_trend(df: pd.DataFrame) -> pd.DataFrame:
     grouped = df.groupby("intake_month", dropna=False).agg(
         merchant_count=("merchant_id", "count"),
@@ -282,7 +382,7 @@ def _monthly_trend(df: pd.DataFrame) -> pd.DataFrame:
         txn_amount_30d=("txn_amount_30d", "sum"),
     )
     grouped["active_30d_rate"] = grouped["active_30d_count"] / grouped["merchant_count"].replace(0, pd.NA)
-    return grouped.reset_index()
+    return _sort_by_month(grouped.reset_index())
 
 
 def _country_monthly(df: pd.DataFrame) -> pd.DataFrame:
@@ -291,10 +391,17 @@ def _country_monthly(df: pd.DataFrame) -> pd.DataFrame:
     pivot = (
         df.pivot_table(index="intake_month", columns="analysis_country", values="merchant_id", aggfunc="count", fill_value=0)
         .reset_index()
-        .sort_values("intake_month")
     )
     pivot.columns = [str(col) for col in pivot.columns]
-    return pivot
+    return _sort_by_month(pivot)
+
+
+def _sort_by_month(df: pd.DataFrame) -> pd.DataFrame:
+    if "intake_month" not in df.columns or df.empty:
+        return df
+    out = df.copy()
+    out["_month_order"] = out["intake_month"].astype(str).map(_month_sort_key)
+    return out.sort_values("_month_order").drop(columns="_month_order")
 
 
 def _institution_rollup(df: pd.DataFrame) -> pd.DataFrame:

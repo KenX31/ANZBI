@@ -22,6 +22,7 @@ DEFAULT_LOCAL_GEO_STAGING_ROOT = Path(
     r"D:\Tencent\Data analysis\ANZ_Data_Warehouse\data\Geo_warehouse_streamlit_staging"
 )
 REMOTE_GEO_ROOT = "processed"
+CSV_DTYPES = {"intake_month": "string"}
 EXPECTED_SCHEMA = {
     "new_intake": "1.0",
     "activation_low_activity": "1.0",
@@ -148,11 +149,9 @@ def _load_frame(source: DataSource, relative_path: str) -> pd.DataFrame:
         path = _local_path(source, relative_path)
         if not path.exists():
             raise DataLoadError(f"Missing local data file: {path}")
-        return _normalize_amount_units(pd.read_csv(path), source.amount_unit)
+        return _normalize_amount_units(_read_csv_path(path), source.amount_unit)
     text = _read_text(source, relative_path)
-    from io import StringIO
-
-    return _normalize_amount_units(pd.read_csv(StringIO(text)), source.amount_unit)
+    return _normalize_amount_units(_read_csv_text(text), source.amount_unit)
 
 
 def _load_page_rows(source: DataSource, relative_path: str) -> pd.DataFrame:
@@ -214,6 +213,16 @@ def _load_geo_frame_optional(source: DataSource, relative_path: str) -> pd.DataF
     from io import StringIO
 
     return pd.read_csv(StringIO(text))
+
+
+def _read_csv_path(path: Path) -> pd.DataFrame:
+    return pd.read_csv(path, dtype=CSV_DTYPES)
+
+
+def _read_csv_text(text: str) -> pd.DataFrame:
+    from io import StringIO
+
+    return pd.read_csv(StringIO(text), dtype=CSV_DTYPES)
 
 
 def _normalize_amount_units(df: pd.DataFrame, amount_unit: str) -> pd.DataFrame:

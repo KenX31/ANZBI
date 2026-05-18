@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from charts import combo_line_bar_option, donut_option, horizontal_bar_option
-from data_loader import DataLoadError, _normalize_amount_units, validate_project
+from data_loader import DataLoadError, _normalize_amount_units, _read_csv_text, validate_project
 from exports import (
     activation_internal_export,
     activation_provider_export,
@@ -20,6 +20,14 @@ from exports import (
 )
 from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
+from pages_or_modules.new_intake import (
+    _apply_online_scope,
+    _apply_zhenxing_scope,
+    _default_month_range,
+    _filter_month_range,
+    _latest_month,
+    _month_options,
+)
 from scripts.build_private_data_project import _new_intake_source_period
 
 
@@ -131,6 +139,67 @@ def test_amount_columns_are_scaled_from_minor_units() -> None:
     assert normalized.loc[0, "trade_amt_prev_1m"] == 2.5
     assert normalized.loc[0, "txn_count_30d"] == 7
     assert normalized.loc[0, "merchant_id"] == "m1"
+
+
+def test_csv_reader_preserves_intake_month_labels() -> None:
+    rows = _read_csv_text("intake_month,txn_amount_30d\n2025.10,100\n")
+    assert rows.loc[0, "intake_month"] == "2025.10"
+
+
+def test_new_intake_default_month_range_uses_latest_six_calendar_months() -> None:
+    rows = pd.DataFrame(
+        {
+            "intake_month": [
+                "2025.08",
+                "2025.09",
+                "2025.10",
+                "2025.11",
+                "2025.12",
+                "2026.01",
+                "2026.02",
+                "2026.03",
+            ],
+            "merchant_id": list(range(8)),
+        }
+    )
+
+    months = _month_options(rows)
+    assert _default_month_range(months) == ("2025.10", "2026.03")
+    assert _latest_month(rows) == "2026.03"
+
+    filtered = _filter_month_range(rows, "2025.10", "2026.03")
+    assert filtered["intake_month"].tolist() == ["2025.10", "2025.11", "2025.12", "2026.01", "2026.02", "2026.03"]
+
+
+def test_new_intake_month_options_recover_legacy_october_label() -> None:
+    rows = pd.DataFrame(
+        {
+            "intake_month": ["2025.09", "2025.1", "2025.11", "2025.12", "2026.01", "2026.02", "2026.03"],
+            "merchant_id": list(range(7)),
+        }
+    )
+
+    months = _month_options(rows)
+    assert "2025.10" in months
+    assert "2025.1" not in months
+    assert _default_month_range(months) == ("2025.10", "2026.03")
+
+    filtered = _filter_month_range(rows, "2025.10", "2026.03")
+    assert filtered["intake_month"].tolist() == ["2025.1", "2025.11", "2025.12", "2026.01", "2026.02", "2026.03"]
+
+
+def test_new_intake_default_scope_excludes_online_and_zhenxing() -> None:
+    rows = pd.DataFrame(
+        {
+            "merchant_id": ["offline", "online", "zhenxing"],
+            "channel_type": ["OFFLINE", "ONLINE", "BOTH"],
+            "is_zhenxing": ["0", "0", "1"],
+        }
+    )
+
+    scoped = _apply_zhenxing_scope(_apply_online_scope(rows, "Exclude ONLINE"), "Exclude Zhenxing")
+
+    assert scoped["merchant_id"].tolist() == ["offline"]
 
 
 def test_reporting_geography_keeps_country_specific_levels() -> None:

@@ -54,6 +54,17 @@ Each BI page has two filtered exports:
 - provider execution list: no `merchant_id`, `institution_id`, or other internal lookup IDs
 - internal record list: includes MID / merchant IDs and institution IDs for follow-up lookup in internal systems
 
+## New Intake Default View
+
+The New Intake page opens as an operational working view:
+
+- cohort month range defaults to the latest 6 available months
+- `Zhenxing` defaults to `Exclude Zhenxing`
+- `Online scope` defaults to `Exclude ONLINE`
+
+These are UI defaults only. The underlying private data still contains the full reviewed
+New Intake contract, and users can include Zhenxing or ONLINE again from the sidebar.
+
 For Streamlit Cloud, configure secrets:
 
 ```toml
