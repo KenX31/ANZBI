@@ -38,6 +38,7 @@ CITY_ALIASES = {
 @dataclass(frozen=True)
 class GeoMatchResult:
     country: str
+    state: str = ""
     city: str = ""
     suburb: str = ""
     geo_area: str = ""
@@ -68,7 +69,7 @@ class StreamlitGeoMatcher:
             or ""
         )
         address = _text(row.get("store_address") or row.get("address") or "")
-        postcode = _extract_postcode(address)
+        postcode = _normalize_postcode(row.get("postcode") or row.get("Postcode")) or _extract_postcode(address)
         city_from_name = _city_from_text(country, name)
 
         if country == "NZ":
@@ -82,7 +83,7 @@ class StreamlitGeoMatcher:
             row = _pick_best_row(self.nz_by_postcode[postcode], address)
             return GeoMatchResult(
                 country="NZ",
-                city=city_from_name or _text(row.get("City")),
+                city=_text(row.get("City")),
                 suburb=_text(row.get("Suburb")),
                 geo_area=_text(row.get("geo_area")),
                 business_cluster=_text(row.get("business_cluster")),
@@ -111,30 +112,29 @@ class StreamlitGeoMatcher:
         return GeoMatchResult(country="NZ")
 
     def _match_au(self, *, address: str, postcode: str, city_from_name: str) -> GeoMatchResult:
-        if city_from_name:
-            row = _pick_best_row(self.au_by_postcode.get(postcode, []), address) if postcode else {}
-            return GeoMatchResult(
-                country="AU",
-                city=city_from_name,
-                suburb=_text(row.get("Suburb")),
-                postcode=postcode,
-                source="merchant_short_name_city",
-            )
-
         if postcode and postcode in self.au_by_postcode:
             row = _pick_best_row(self.au_by_postcode[postcode], address)
             return GeoMatchResult(
                 country="AU",
+                state=_text(row.get("State")),
                 city=_text(row.get("City")),
                 suburb=_text(row.get("Suburb")),
                 postcode=postcode,
                 source="au_postcode_lookup",
             )
 
+        if city_from_name:
+            return GeoMatchResult(
+                country="AU",
+                city=city_from_name,
+                source="merchant_short_name_city",
+            )
+
         manual = _find_manual_au_rule(address, postcode, self.au_manual_rules)
         if manual is not None:
             return GeoMatchResult(
                 country="AU",
+                state=_text(manual.get("State")),
                 city=_text(manual.get("City")),
                 suburb=_text(manual.get("Suburb")),
                 geo_area=_text(manual.get("area_hint")),
@@ -147,6 +147,7 @@ class StreamlitGeoMatcher:
         if alias is not None:
             return GeoMatchResult(
                 country="AU",
+                state=_text(alias.get("State")),
                 city=_text(alias.get("City")),
                 suburb=_text(alias.get("Suburb")),
                 postcode=_text(alias.get("Postcode")),
@@ -157,6 +158,44 @@ class StreamlitGeoMatcher:
         if city_from_address:
             return GeoMatchResult(country="AU", city=city_from_address, source="au_address_city_keyword")
         return GeoMatchResult(country="AU")
+
+
+def append_staging_geo_columns(rows: pd.DataFrame, matcher: StreamlitGeoMatcher) -> pd.DataFrame:
+    out = rows.copy()
+    if out.empty:
+        for column in (
+            "staging_country",
+            "staging_state",
+            "staging_city",
+            "staging_suburb",
+            "staging_geo_area",
+            "staging_business_cluster",
+            "staging_postcode",
+            "staging_geo_source",
+        ):
+            out[column] = []
+        return out
+
+    matched = [matcher.match_row(record) for record in out.to_dict("records")]
+    staged = pd.DataFrame(
+        [
+            {
+                "staging_country": item.country,
+                "staging_state": item.state,
+                "staging_city": item.city,
+                "staging_suburb": item.suburb,
+                "staging_geo_area": item.geo_area,
+                "staging_business_cluster": item.business_cluster,
+                "staging_postcode": item.postcode,
+                "staging_geo_source": item.source,
+            }
+            for item in matched
+        ],
+        index=out.index,
+    )
+    for column in staged.columns:
+        out[column] = staged[column]
+    return out
 
 
 def compare_geo_coverage(rows: pd.DataFrame, matcher: StreamlitGeoMatcher) -> dict[str, Any]:
@@ -318,4 +357,3 @@ def _normalize_alias(value: Any) -> str:
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
-

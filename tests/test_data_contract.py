@@ -121,14 +121,25 @@ def test_reporting_geography_keeps_country_specific_levels() -> None:
                 "business_suburb": "Albany",
                 "geo_area": "North Shore",
                 "business_cluster": "Albany Cluster",
+                "staging_city": "Auckland",
+                "staging_geo_area": "Central Auckland",
+                "staging_business_cluster": "Reviewed Cluster",
             },
             {
                 "analysis_country": "AU",
                 "state": "NSW",
                 "business_city": "Sydney",
                 "business_suburb": "Haymarket",
+                "staging_city": "Sydney",
                 "geo_area": "Should not be AU geo area",
                 "business_cluster": "Should not be AU cluster",
+            },
+            {
+                "analysis_country": "NZ",
+                "business_city": "Auckland",
+                "geo_area": "Legacy Auckland Area",
+                "staging_city": "",
+                "staging_geo_area": "",
             },
         ]
     )
@@ -136,11 +147,14 @@ def test_reporting_geography_keeps_country_specific_levels() -> None:
     bridged = with_reporting_geography(rows, country_columns="analysis_country")
 
     assert bridged.loc[0, "geo_reporting_level"] == "nz_geo_area"
-    assert bridged.loc[0, "geo_reporting_name"] == "North Shore"
+    assert bridged.loc[0, "geo_reporting_name"] == "Central Auckland"
+    assert bridged.loc[0, "nz_business_cluster"] == "Reviewed Cluster"
     assert bridged.loc[1, "geo_reporting_level"] == "au_city"
     assert bridged.loc[1, "geo_reporting_name"] == "Sydney"
     assert bridged.loc[1, "nz_geo_area"] == ""
     assert bridged.loc[1, "nz_business_cluster"] == ""
+    assert bridged.loc[2, "nz_geo_area"] == ""
+    assert bridged.loc[2, "geo_city"] == ""
     assert country_scope(bridged.iloc[[0]]) == "NZ"
     assert [spec.column for spec in sidebar_geo_filter_specs("AU")] == [
         "geo_state",

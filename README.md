@@ -100,6 +100,8 @@ geo_reporting_name
 Rules:
 
 - NZ keeps `geo_area` and `business_cluster` as country-specific fields.
+- If reviewed staging columns such as `staging_geo_area` are present, they take
+  precedence over legacy prepared fields in the Streamlit reporting bridge.
 - AU uses `au_service_area` when a reviewed AU operating area exists; otherwise the
   reporting fallback is city, then state, suburb, postcode, country.
 - Mixed AU/NZ sidebar views expose only shared geography filters such as country and city.
@@ -113,6 +115,17 @@ The private data build writes the non-sensitive bridge contract to:
 ```text
 processed/shared_dimensions/geo_reporting_bridge.csv
 ```
+
+For local QA on this workstation, the app also reads the staging matcher directly
+when `LOCAL_GEO_STAGING_ROOT` exists, defaulting to:
+
+```text
+D:\Tencent\Data analysis\ANZ_Data_Warehouse\data\Geo_warehouse_streamlit_staging
+```
+
+This lets localhost reflect the reviewed staging geography before the private data
+repo is rebuilt. Deployment should still use reviewed processed files from
+`KenX31/anzdata`.
 
 ## Streamlit Geo Staging Check
 

@@ -10,9 +10,14 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
+
 
 PROJECT_ID = "anz-bi-platform"
 DEFAULT_LOCAL_PROJECT_ROOT = Path(r"D:\Tencent\Data analysis\anzdata-worktree\projects\anz-bi-platform")
+DEFAULT_LOCAL_GEO_STAGING_ROOT = Path(
+    r"D:\Tencent\Data analysis\ANZ_Data_Warehouse\data\Geo_warehouse_streamlit_staging"
+)
 EXPECTED_SCHEMA = {
     "new_intake": "1.0",
     "activation_low_activity": "1.0",
@@ -28,6 +33,7 @@ class DataLoadError(RuntimeError):
 class DataSource:
     backend: str
     local_root: Path | None = None
+    geo_staging_root: Path | None = None
     github_repo: str = "KenX31/anzdata"
     github_ref: str = "main"
     github_project: str = PROJECT_ID
@@ -45,12 +51,17 @@ def _secret_or_env(name: str, default: str = "") -> str:
 def resolve_data_source() -> DataSource:
     backend = _secret_or_env("DATA_BACKEND", "local")
     local_root = _secret_or_env("LOCAL_DATA_ROOT", "")
+    geo_staging_root = _secret_or_env("LOCAL_GEO_STAGING_ROOT", "")
     resolved_local_root = Path(local_root).expanduser() if local_root else None
     if backend == "local" and resolved_local_root is None and DEFAULT_LOCAL_PROJECT_ROOT.exists():
         resolved_local_root = DEFAULT_LOCAL_PROJECT_ROOT
+    resolved_geo_staging_root = Path(geo_staging_root).expanduser() if geo_staging_root else None
+    if backend == "local" and resolved_geo_staging_root is None and DEFAULT_LOCAL_GEO_STAGING_ROOT.exists():
+        resolved_geo_staging_root = DEFAULT_LOCAL_GEO_STAGING_ROOT
     return DataSource(
         backend=backend,
         local_root=resolved_local_root,
+        geo_staging_root=resolved_geo_staging_root,
         github_repo=_secret_or_env("DATA_GITHUB_REPO", "KenX31/anzdata"),
         github_ref=_secret_or_env("DATA_GITHUB_REF", "main"),
         github_project=_secret_or_env("DATA_PROJECT", PROJECT_ID),
@@ -65,7 +76,7 @@ def load_project_data() -> dict[str, Any]:
     return {
         "manifest": manifest,
         "new_intake": {
-            "rows": _load_frame(source, "processed/new_intake/new_intake_rows.csv"),
+            "rows": _load_page_rows(source, "processed/new_intake/new_intake_rows.csv"),
             "summary": _load_json(source, "processed/new_intake/new_intake_summary.json"),
             "institution_rollup": _load_frame(source, "processed/new_intake/new_intake_institution_rollup.csv"),
             "export_rows": _load_frame(source, "processed/new_intake/new_intake_export.csv"),
@@ -73,7 +84,7 @@ def load_project_data() -> dict[str, Any]:
             "internal_export_rows": _load_frame_optional(source, "processed/new_intake/new_intake_internal_record_export.csv"),
         },
         "activation_low_activity": {
-            "rows": _load_frame(source, "processed/activation_low_activity/activation_candidates.csv"),
+            "rows": _load_page_rows(source, "processed/activation_low_activity/activation_candidates.csv"),
             "summary": _load_json(source, "processed/activation_low_activity/low_activity_bi_summary.json"),
             "area_rollup": _load_frame(source, "processed/activation_low_activity/area_low_activity_rollup.csv"),
             "export_rows": _load_frame(source, "processed/activation_low_activity/activation_export.csv"),
@@ -132,6 +143,23 @@ def _load_frame(source: DataSource, relative_path: str) -> pd.DataFrame:
     from io import StringIO
 
     return pd.read_csv(StringIO(text))
+
+
+def _load_page_rows(source: DataSource, relative_path: str) -> pd.DataFrame:
+    frame = _load_frame(source, relative_path)
+    return _maybe_apply_local_geo_staging(source, frame)
+
+
+def _maybe_apply_local_geo_staging(source: DataSource, frame: pd.DataFrame) -> pd.DataFrame:
+    if source.backend != "local" or source.geo_staging_root is None:
+        return frame
+    if "staging_geo_area" in frame.columns:
+        return frame
+    required = ("nz_geo_dimension.csv", "au_geo_dimension.csv")
+    if not all((source.geo_staging_root / name).exists() for name in required):
+        return frame
+    matcher = StreamlitGeoMatcher(source.geo_staging_root)
+    return append_staging_geo_columns(frame, matcher)
 
 
 def _load_frame_optional(source: DataSource, relative_path: str) -> pd.DataFrame:

@@ -21,6 +21,7 @@ from exports import (  # noqa: E402
     new_intake_internal_export,
     new_intake_provider_export,
 )
+from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns  # noqa: E402
 from geography import geo_reporting_bridge_contract, with_reporting_geography  # noqa: E402
 
 
@@ -35,6 +36,9 @@ DEFAULT_NEW_INTAKE_PREPARED = Path(
 )
 DEFAULT_ACTIVATION_PREPARED = Path(
     r"D:\Tencent\Data analysis\Wechat-Pay-ANZ-MAP\tmp\local-data\prepared\activation-map"
+)
+DEFAULT_GEO_STAGING = Path(
+    r"D:\Tencent\Data analysis\ANZ_Data_Warehouse\data\Geo_warehouse_streamlit_staging"
 )
 
 NEW_INTAKE_FIELDS = [
@@ -117,12 +121,14 @@ def main() -> int:
     parser.add_argument("--output-root", required=True, help="Target projects/anz-bi-platform directory.")
     parser.add_argument("--new-intake-prepared", default=str(DEFAULT_NEW_INTAKE_PREPARED))
     parser.add_argument("--activation-prepared", default=str(DEFAULT_ACTIVATION_PREPARED))
+    parser.add_argument("--geo-staging-dir", default=str(DEFAULT_GEO_STAGING))
     parser.add_argument("--version", default=VERSION)
     args = parser.parse_args()
 
     output_root = Path(args.output_root).expanduser()
     new_intake_prepared = Path(args.new_intake_prepared).expanduser()
     activation_prepared = Path(args.activation_prepared).expanduser()
+    geo_staging_dir = Path(args.geo_staging_dir).expanduser() if args.geo_staging_dir else None
 
     _require_file(new_intake_prepared / "new_intake_rows.json")
     _require_file(new_intake_prepared / "new_intake_summary.json")
@@ -145,12 +151,19 @@ def main() -> int:
     activation_out.mkdir(parents=True, exist_ok=True)
     shared_out.mkdir(parents=True, exist_ok=True)
 
+    new_intake_table = pd.DataFrame([_pick(row, NEW_INTAKE_FIELDS) for row in new_intake_rows])
+    activation_table = pd.DataFrame([_activation_row(row) for row in activation_rows])
+    if geo_staging_dir and geo_staging_dir.exists():
+        matcher = StreamlitGeoMatcher(geo_staging_dir)
+        new_intake_table = append_staging_geo_columns(new_intake_table, matcher)
+        activation_table = append_staging_geo_columns(activation_table, matcher)
+
     new_intake_table = with_reporting_geography(
-        pd.DataFrame([_pick(row, NEW_INTAKE_FIELDS) for row in new_intake_rows]),
+        new_intake_table,
         country_columns=["analysis_country", "country_group", "merchant_country_code"],
     )
     activation_table = with_reporting_geography(
-        pd.DataFrame([_activation_row(row) for row in activation_rows]),
+        activation_table,
         country_columns=["scope_country", "country_group", "merchant_country_code"],
     )
     geo_bridge = geo_reporting_bridge_contract()
@@ -190,6 +203,7 @@ def main() -> int:
         "source": {
             "new_intake_prepared": str(new_intake_prepared),
             "activation_prepared": str(activation_prepared),
+            "geo_staging_dir": str(geo_staging_dir) if geo_staging_dir else "",
         },
         "page_datasets": {
             "new_intake": {

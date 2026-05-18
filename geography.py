@@ -46,20 +46,34 @@ def with_reporting_geography(
     out = df.copy()
     countries = _as_columns(country_columns) or list(DEFAULT_COUNTRY_COLUMNS)
 
-    out["geo_country"] = _first_text(out, countries).map(normalize_country)
-    out["geo_state"] = _first_text(out, ["geo_state", "business_state", "state", "State", "province"])
-    out["geo_city"] = _first_text(out, ["geo_city", "business_city", "city", "City"])
-    out["geo_suburb"] = _first_text(out, ["geo_suburb", "business_suburb", "suburb", "Suburb"])
-    out["geo_postcode"] = _first_text(out, ["geo_postcode", "postcode", "Postcode"])
+    out["geo_country"] = _first_text(out, _staging_or_fallback(out, "staging_country", countries)).map(normalize_country)
+    out["geo_state"] = _first_text(
+        out, _staging_or_fallback(out, "staging_state", ["geo_state", "business_state", "state", "State", "province"])
+    )
+    out["geo_city"] = _first_text(
+        out, _staging_or_fallback(out, "staging_city", ["geo_city", "business_city", "city", "City"])
+    )
+    out["geo_suburb"] = _first_text(
+        out, _staging_or_fallback(out, "staging_suburb", ["geo_suburb", "business_suburb", "suburb", "Suburb"])
+    )
+    out["geo_postcode"] = _first_text(
+        out, _staging_or_fallback(out, "staging_postcode", ["geo_postcode", "postcode", "Postcode"])
+    )
 
     nz_mask = out["geo_country"].eq("NZ")
     au_mask = out["geo_country"].eq("AU")
 
     out["nz_geo_area"] = ""
-    out.loc[nz_mask, "nz_geo_area"] = _first_text(out.loc[nz_mask], ["nz_geo_area", "geo_area"])
+    nz_geo_area_sources = ["staging_geo_area"] if "staging_geo_area" in out.columns else ["nz_geo_area", "geo_area"]
+    out.loc[nz_mask, "nz_geo_area"] = _first_text(out.loc[nz_mask], nz_geo_area_sources)
     out["nz_business_cluster"] = ""
+    nz_cluster_sources = (
+        ["staging_business_cluster"]
+        if "staging_business_cluster" in out.columns
+        else ["nz_business_cluster", "business_cluster"]
+    )
     out.loc[nz_mask, "nz_business_cluster"] = _first_text(
-        out.loc[nz_mask], ["nz_business_cluster", "business_cluster"]
+        out.loc[nz_mask], nz_cluster_sources
     )
 
     out["au_service_area"] = ""
@@ -211,3 +225,9 @@ def _as_columns(columns: str | Iterable[str] | None) -> list[str]:
     if isinstance(columns, str):
         return [columns]
     return [str(column) for column in columns]
+
+
+def _staging_or_fallback(df: pd.DataFrame, staging_column: str, fallback_columns: Iterable[str]) -> list[str]:
+    if staging_column in df.columns:
+        return [staging_column]
+    return list(fallback_columns)
