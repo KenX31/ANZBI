@@ -7,6 +7,7 @@ from typing import Iterable
 import pandas as pd
 import streamlit as st
 
+from auth import can_export_data, render_export_restricted_notice
 from charts import (
     PALETTE,
     donut_option,
@@ -80,21 +81,24 @@ def render_silent_merchants_page(data: dict[str, object]) -> None:
         st.info("No merchants match the current filters.")
         return
 
-    provider_export = silent_merchants_provider_export(filtered)
-    internal_export = silent_merchants_internal_export(filtered)
-    d1, d2 = st.columns(2)
-    d1.download_button(
-        "Export provider execution list",
-        csv_bytes(provider_export),
-        "silent_merchants_provider_execution_list.csv",
-        "text/csv",
-    )
-    d2.download_button(
-        "Export internal record list",
-        csv_bytes(internal_export),
-        "silent_merchants_internal_record_list.csv",
-        "text/csv",
-    )
+    if can_export_data():
+        provider_export = silent_merchants_provider_export(filtered)
+        internal_export = silent_merchants_internal_export(filtered)
+        d1, d2 = st.columns(2)
+        d1.download_button(
+            "Export provider execution list",
+            csv_bytes(provider_export),
+            "silent_merchants_provider_execution_list.csv",
+            "text/csv",
+        )
+        d2.download_button(
+            "Export internal record list",
+            csv_bytes(internal_export),
+            "silent_merchants_internal_record_list.csv",
+            "text/csv",
+        )
+    else:
+        render_export_restricted_notice()
 
     tab_overview, tab_area, tab_institutions, tab_merchants = st.tabs(
         ["Overview", "Area", "Institutions", "Merchant Details"]

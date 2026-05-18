@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from auth import can_export_data, render_export_restricted_notice
 from charts import (
     PALETTE,
     combo_line_bar_option,
@@ -61,21 +62,24 @@ def render_new_intake_page(data: dict[str, object]) -> None:
         st.info("当前筛选下没有匹配商户。")
         return
 
-    provider_export = new_intake_provider_export(filtered)
-    internal_export = new_intake_internal_export(filtered)
-    d1, d2 = st.columns(2)
-    d1.download_button(
-        "导出服务商执行清单",
-        csv_bytes(provider_export),
-        "new_intake_provider_execution_list.csv",
-        "text/csv",
-    )
-    d2.download_button(
-        "导出内部记录清单",
-        csv_bytes(internal_export),
-        "new_intake_internal_record_list.csv",
-        "text/csv",
-    )
+    if can_export_data():
+        provider_export = new_intake_provider_export(filtered)
+        internal_export = new_intake_internal_export(filtered)
+        d1, d2 = st.columns(2)
+        d1.download_button(
+            "导出服务商执行清单",
+            csv_bytes(provider_export),
+            "new_intake_provider_execution_list.csv",
+            "text/csv",
+        )
+        d2.download_button(
+            "导出内部记录清单",
+            csv_bytes(internal_export),
+            "new_intake_internal_record_list.csv",
+            "text/csv",
+        )
+    else:
+        render_export_restricted_notice()
 
     tab_overview, tab_institutions, tab_merchants = st.tabs(["总览", "机构", "商户明细"])
     with tab_overview:

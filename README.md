@@ -98,6 +98,12 @@ Generate a password hash locally:
 python -c "from auth import make_password_hash; print(make_password_hash('replace-with-password'))"
 ```
 
+Export permission is controlled by the `permissions` list:
+
+- `["viewer"]`: can view pages, charts, and tables, but export buttons are hidden
+- `["user"]`: can view and export
+- `["*"]`: full export access
+
 Optional LDAP secrets:
 
 ```toml

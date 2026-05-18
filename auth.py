@@ -15,6 +15,8 @@ TRUE_VALUES = {"1", "true", "yes", "y", "on", "enabled"}
 FALSE_VALUES = {"0", "false", "no", "n", "off", "disabled"}
 AUTH_PROVIDERS = {"local", "ldap"}
 LOCAL_USER_SESSION_KEY = "anz_bi_local_user"
+CURRENT_USER_SESSION_KEY = "anz_bi_current_user"
+EXPORT_PERMISSIONS = {"*", "admin", "user", "export", "download", "can_export"}
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 260_000
 
@@ -104,10 +106,34 @@ def require_login() -> dict[str, Any] | None:
     )
     if user is None:
         st.stop()
+    st.session_state[CURRENT_USER_SESSION_KEY] = user
 
     with st.sidebar:
-        authenticator.createLogoutForm(_logout_form_config(user, settings.signout_form))
+        authenticator.createLogoutForm(_logout_form_config(user, settings.signout_form), callback=_clear_current_user)
     return user
+
+
+def current_user() -> dict[str, Any] | None:
+    user = st.session_state.get(CURRENT_USER_SESSION_KEY)
+    if isinstance(user, dict):
+        return user
+    user = st.session_state.get(LOCAL_USER_SESSION_KEY)
+    return user if isinstance(user, dict) else None
+
+
+def can_export_data(user: Mapping[str, Any] | None = None) -> bool:
+    if user is None:
+        user = current_user()
+    if user is None:
+        return True
+    permissions = _permission_set(user)
+    if not permissions:
+        return True
+    return bool(permissions.intersection(EXPORT_PERMISSIONS))
+
+
+def render_export_restricted_notice() -> None:
+    st.info("当前账号为 viewer 权限，可查看页面数据，但不能导出清单。")
 
 
 def resolve_auth_settings(
@@ -192,6 +218,7 @@ def verify_password(password: str, encoded_hash: str) -> bool:
 def _require_local_login(settings: AuthSettings) -> dict[str, Any]:
     current_user = st.session_state.get(LOCAL_USER_SESSION_KEY)
     if isinstance(current_user, dict):
+        st.session_state[CURRENT_USER_SESSION_KEY] = current_user
         _render_local_logout(current_user, settings)
         return current_user
 
@@ -214,6 +241,7 @@ def _require_local_login(settings: AuthSettings) -> dict[str, Any]:
             st.error("账号或密码不正确。")
         else:
             st.session_state[LOCAL_USER_SESSION_KEY] = user
+            st.session_state[CURRENT_USER_SESSION_KEY] = user
             st.rerun()
     st.stop()
 
@@ -258,7 +286,12 @@ def _render_local_logout(user: Mapping[str, Any], settings: AuthSettings) -> Non
         st.caption(f"已登录：{display_name}{role_suffix}")
         if st.button(label, key="anz_bi_local_logout", use_container_width=True):
             st.session_state.pop(LOCAL_USER_SESSION_KEY, None)
+            st.session_state.pop(CURRENT_USER_SESSION_KEY, None)
             st.rerun()
+
+
+def _clear_current_user(_event: Any) -> None:
+    st.session_state.pop(CURRENT_USER_SESSION_KEY, None)
 
 
 def _authorization_check(settings: AuthSettings):
@@ -294,6 +327,17 @@ def _display_name(user: Mapping[str, Any]) -> str:
         if value:
             return value
     return "已认证用户"
+
+
+def _permission_set(user: Mapping[str, Any]) -> set[str]:
+    raw = user.get("permissions") or []
+    if isinstance(raw, str):
+        values = raw.split(",")
+    elif isinstance(raw, (list, tuple, set)):
+        values = raw
+    else:
+        values = [raw]
+    return {str(value).strip().casefold() for value in values if str(value).strip()}
 
 
 def _user_identifiers(user: Mapping[str, Any]) -> set[str]:
