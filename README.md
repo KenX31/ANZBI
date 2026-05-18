@@ -105,7 +105,9 @@ Rules:
 - AU uses `au_service_area` when a reviewed AU operating area exists; otherwise the
   reporting fallback is city, then state, suburb, postcode, country.
 - Mixed AU/NZ sidebar views expose only shared geography filters such as country and city.
-- Selecting only NZ exposes City / NZ geo area / NZ cluster / Suburb.
+- Selecting only NZ exposes City first. `NZ geo area` stays disabled until at least
+  one City is selected, and it only enables when the selected City has reviewed
+  `nz_geo_area` values.
 - Selecting only AU exposes State / City / Suburb / Postcode.
 - Charts and area ranking use `geo_reporting_level` + `geo_reporting_name` so the UI
   can be shared without pretending the two countries have identical dimensions.
@@ -126,6 +128,24 @@ D:\Tencent\Data analysis\ANZ_Data_Warehouse\data\Geo_warehouse_streamlit_staging
 This lets localhost reflect the reviewed staging geography before the private data
 repo is rebuilt. Deployment should still use reviewed processed files from
 `KenX31/anzdata`.
+
+For deployment, the reviewed geo dimensions should be stored in the private data
+repo under the ANZ BI project, for example:
+
+```text
+KenX31/anzdata
+projects/anz-bi-platform/
+  processed/shared_dimensions/
+    geo_reporting_bridge.csv
+    geo_warehouse_streamlit_staging/
+      nz_geo_dimension.csv
+      nz_geo_area_rules.csv
+      au_geo_dimension.csv
+      au_geo_match_rules.csv
+```
+
+The app reads prepared page rows from `KenX31/anzdata`; those rows should include
+the reviewed `staging_*` geography columns after the private data package is rebuilt.
 
 ## Streamlit Geo Staging Check
 

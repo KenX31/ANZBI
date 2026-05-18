@@ -13,11 +13,32 @@ def options(df: pd.DataFrame, column: str) -> list[str]:
     return sorted(value for value in values.unique() if value and value.lower() != "nan")
 
 
-def multiselect_filter(label: str, df: pd.DataFrame, column: str, *, key: str) -> list[str]:
+def multiselect_filter(
+    label: str,
+    df: pd.DataFrame,
+    column: str,
+    *,
+    key: str,
+    disabled: bool = False,
+    help_text: str | None = None,
+) -> list[str]:
     values = options(df, column)
+    if disabled:
+        return disabled_multiselect_filter(label, key=key, help_text=help_text)
     if not values:
         return []
-    return st.sidebar.multiselect(label, values, key=key)
+    _prune_multiselect_state(key, values)
+    return st.sidebar.multiselect(label, values, key=key, help=help_text)
+
+
+def disabled_multiselect_filter(label: str, *, key: str, help_text: str | None = None) -> list[str]:
+    if key in st.session_state:
+        del st.session_state[key]
+    try:
+        st.sidebar.multiselect(label, [], key=key, disabled=True, help=help_text)
+    except TypeError:
+        st.sidebar.caption(f"{label}: {help_text or 'Select the required parent filter first.'}")
+    return []
 
 
 def apply_in_filter(df: pd.DataFrame, column: str, selected: Iterable[str]) -> pd.DataFrame:
@@ -44,3 +65,14 @@ def number(value: object) -> float:
     except (TypeError, ValueError):
         return 0.0
 
+
+def _prune_multiselect_state(key: str, valid_values: list[str]) -> None:
+    if key not in st.session_state:
+        return
+    current = st.session_state.get(key)
+    if not isinstance(current, list):
+        return
+    valid = set(valid_values)
+    pruned = [value for value in current if value in valid]
+    if pruned != current:
+        st.session_state[key] = pruned

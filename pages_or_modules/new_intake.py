@@ -14,7 +14,7 @@ from charts import (
     treemap_option,
 )
 from exports import csv_bytes, new_intake_internal_export, new_intake_provider_export
-from filters import apply_text_filter, multiselect_filter, options
+from filters import apply_text_filter, disabled_multiselect_filter, multiselect_filter, options
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
 from metrics import count_flag, format_int, format_money, format_pct, rate, sum_number
 
@@ -164,10 +164,7 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     if selected_country:
         filtered = filtered[filtered["geo_country"].astype(str).isin(selected_country)]
 
-    for spec in sidebar_geo_filter_specs(country_scope(filtered)):
-        selected = multiselect_filter(spec.label, filtered, spec.column, key=f"ni_{spec.key_suffix}")
-        if selected:
-            filtered = filtered[filtered[spec.column].astype(str).isin(selected)]
+    filtered = _apply_geo_filters(filtered)
 
     for label, column, key in (
         ("Institution", "institution_standard", "ni_institution"),
@@ -206,6 +203,68 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
         ],
         query,
     )
+
+
+def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
+    scope = country_scope(df)
+    if scope == "NZ":
+        return _apply_nz_geo_filters(df)
+    if scope == "MIXED":
+        selected_city = multiselect_filter("City", df, "geo_city", key="ni_geo_city")
+        filtered = df[df["geo_city"].astype(str).isin(selected_city)] if selected_city else df
+        if selected_city and country_scope(filtered) == "NZ":
+            return _apply_nz_geo_filters(filtered, selected_city=selected_city)
+        if selected_city and country_scope(filtered) == "AU":
+            return _apply_standard_geo_filters(filtered, skip_columns={"geo_city"})
+        return filtered
+    return _apply_standard_geo_filters(df)
+
+
+def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None = None) -> pd.DataFrame:
+    filtered = df
+    if selected_city is None:
+        selected_city = multiselect_filter("City", filtered, "geo_city", key="ni_geo_city")
+        if selected_city:
+            filtered = filtered[filtered["geo_city"].astype(str).isin(selected_city)]
+
+    area_key = "ni_nz_geo_area"
+    if not selected_city:
+        disabled_multiselect_filter(
+            "NZ geo area",
+            key=area_key,
+            help_text="Select City first to enable NZ geo area.",
+        )
+    elif not options(filtered, "nz_geo_area"):
+        disabled_multiselect_filter(
+            "NZ geo area",
+            key=area_key,
+            help_text="Selected City has no reviewed NZ geo area.",
+        )
+    else:
+        selected_area = multiselect_filter("NZ geo area", filtered, "nz_geo_area", key=area_key)
+        if selected_area:
+            filtered = filtered[filtered["nz_geo_area"].astype(str).isin(selected_area)]
+
+    for label, column, key in (
+        ("NZ cluster", "nz_business_cluster", "ni_nz_cluster"),
+        ("Suburb", "geo_suburb", "ni_geo_suburb"),
+    ):
+        selected = multiselect_filter(label, filtered, column, key=key)
+        if selected:
+            filtered = filtered[filtered[column].astype(str).isin(selected)]
+    return filtered
+
+
+def _apply_standard_geo_filters(df: pd.DataFrame, *, skip_columns: set[str] | None = None) -> pd.DataFrame:
+    filtered = df
+    skip_columns = skip_columns or set()
+    for spec in sidebar_geo_filter_specs(country_scope(filtered)):
+        if spec.column in skip_columns:
+            continue
+        selected = multiselect_filter(spec.label, filtered, spec.column, key=f"ni_{spec.key_suffix}")
+        if selected:
+            filtered = filtered[filtered[spec.column].astype(str).isin(selected)]
+    return filtered
 
 
 def _normalize_numeric(df: pd.DataFrame) -> pd.DataFrame:
