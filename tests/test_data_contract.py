@@ -18,6 +18,7 @@ from exports import (
     new_intake_internal_export,
     new_intake_provider_export,
 )
+from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
 from scripts.build_private_data_project import _new_intake_source_period
 
 
@@ -69,6 +70,8 @@ def test_new_intake_provider_export_excludes_internal_ids() -> None:
                 "institution_standard": "Demo PSP",
                 "analysis_country": "NZ",
                 "business_city": "Auckland",
+                "geo_area": "Auckland Central",
+                "business_cluster": "CBD",
                 "active_30d_flag": 1,
                 "store_address": "Demo address",
                 "mcc_major_industry": "餐饮类",
@@ -82,6 +85,7 @@ def test_new_intake_provider_export_excludes_internal_ids() -> None:
     assert "merchant_id" in internal.columns
     assert internal.loc[0, "merchant_id"] == "456"
     assert provider.loc[0, "接入后30天激活状态"] == "已激活"
+    assert provider.loc[0, "地理展示名称"] == "Auckland Central"
 
 
 def test_activation_provider_export_excludes_internal_ids() -> None:
@@ -108,6 +112,44 @@ def test_activation_provider_export_excludes_internal_ids() -> None:
     assert "candidate_rank" in internal.columns
 
 
+def test_reporting_geography_keeps_country_specific_levels() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "analysis_country": "NZ",
+                "business_city": "Auckland",
+                "business_suburb": "Albany",
+                "geo_area": "North Shore",
+                "business_cluster": "Albany Cluster",
+            },
+            {
+                "analysis_country": "AU",
+                "state": "NSW",
+                "business_city": "Sydney",
+                "business_suburb": "Haymarket",
+                "geo_area": "Should not be AU geo area",
+                "business_cluster": "Should not be AU cluster",
+            },
+        ]
+    )
+
+    bridged = with_reporting_geography(rows, country_columns="analysis_country")
+
+    assert bridged.loc[0, "geo_reporting_level"] == "nz_geo_area"
+    assert bridged.loc[0, "geo_reporting_name"] == "North Shore"
+    assert bridged.loc[1, "geo_reporting_level"] == "au_city"
+    assert bridged.loc[1, "geo_reporting_name"] == "Sydney"
+    assert bridged.loc[1, "nz_geo_area"] == ""
+    assert bridged.loc[1, "nz_business_cluster"] == ""
+    assert country_scope(bridged.iloc[[0]]) == "NZ"
+    assert [spec.column for spec in sidebar_geo_filter_specs("AU")] == [
+        "geo_state",
+        "geo_city",
+        "geo_suburb",
+        "geo_postcode",
+    ]
+
+
 def test_echarts_option_builders_return_core_shapes() -> None:
     trend = pd.DataFrame([{"month": "2026.03", "count": 10, "rate": 0.4}])
     combo = combo_line_bar_option(
@@ -128,4 +170,3 @@ def test_echarts_option_builders_return_core_shapes() -> None:
 
     rank = horizontal_bar_option(dist, label="label", value="count", title="Rank")
     assert rank["series"][0]["type"] == "bar"
-

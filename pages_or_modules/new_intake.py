@@ -15,11 +15,15 @@ from charts import (
 )
 from exports import csv_bytes, new_intake_internal_export, new_intake_provider_export
 from filters import apply_text_filter, multiselect_filter, options
+from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
 from metrics import count_flag, format_int, format_money, format_pct, rate, sum_number
 
 
 def render_new_intake_page(data: dict[str, object]) -> None:
-    rows = data["rows"].copy()  # type: ignore[index, union-attr]
+    rows = with_reporting_geography(
+        data["rows"].copy(),  # type: ignore[index, union-attr]
+        country_columns=["analysis_country", "country_group", "merchant_country_code"],
+    )
     if rows.empty:
         st.warning("No New Intake data is available.")
         return
@@ -121,11 +125,15 @@ def render_new_intake_page(data: dict[str, object]) -> None:
             "merchant_id",
             "merchant_short_name",
             "institution_standard",
-            "analysis_country",
-            "business_city",
-            "business_suburb",
-            "geo_area",
-            "business_cluster",
+            "geo_country",
+            "geo_state",
+            "geo_city",
+            "geo_suburb",
+            "geo_postcode",
+            "geo_reporting_level_label",
+            "geo_reporting_name",
+            "nz_geo_area",
+            "nz_business_cluster",
             "mcc_major_industry",
             "channel_type",
             "active_30d_flag",
@@ -152,12 +160,16 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
             & (filtered["intake_month"].astype(str) <= str(end))
         ]
 
+    selected_country = multiselect_filter("Country", filtered, "geo_country", key="ni_country")
+    if selected_country:
+        filtered = filtered[filtered["geo_country"].astype(str).isin(selected_country)]
+
+    for spec in sidebar_geo_filter_specs(country_scope(filtered)):
+        selected = multiselect_filter(spec.label, filtered, spec.column, key=f"ni_{spec.key_suffix}")
+        if selected:
+            filtered = filtered[filtered[spec.column].astype(str).isin(selected)]
+
     for label, column, key in (
-        ("Country", "analysis_country", "ni_country"),
-        ("City", "business_city", "ni_city"),
-        ("Suburb", "business_suburb", "ni_suburb"),
-        ("Geo area", "geo_area", "ni_geo_area"),
-        ("Cluster", "business_cluster", "ni_cluster"),
         ("Institution", "institution_standard", "ni_institution"),
         ("Channel", "channel_type", "ni_channel"),
         ("Industry", "mcc_major_industry", "ni_industry"),
@@ -182,7 +194,16 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     query = st.sidebar.text_input("Merchant / institution keyword", key="ni_query")
     return apply_text_filter(
         filtered,
-        ["merchant_id", "merchant_company_name", "merchant_short_name", "institution_standard", "institution_name"],
+        [
+            "merchant_id",
+            "merchant_company_name",
+            "merchant_short_name",
+            "institution_standard",
+            "institution_name",
+            "geo_reporting_name",
+            "geo_city",
+            "geo_suburb",
+        ],
         query,
     )
 

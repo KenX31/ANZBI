@@ -17,6 +17,7 @@ EXPECTED_SCHEMA = {
     "new_intake": "1.0",
     "activation_low_activity": "1.0",
 }
+EXPECTED_GEO_CONTRACT = "country-aware-1.0"
 
 
 class DataLoadError(RuntimeError):
@@ -79,6 +80,9 @@ def load_project_data() -> dict[str, Any]:
             "provider_export_rows": _load_frame_optional(source, "processed/activation_low_activity/activation_provider_export.csv"),
             "internal_export_rows": _load_frame_optional(source, "processed/activation_low_activity/activation_internal_record_export.csv"),
         },
+        "shared_dimensions": {
+            "geo_reporting_bridge": _load_frame_optional(source, "processed/shared_dimensions/geo_reporting_bridge.csv"),
+        },
     }
 
 
@@ -97,6 +101,14 @@ def validate_project(project: dict[str, Any]) -> None:
                 f"{page} schema version is {actual or 'missing'}; expected {expected}. "
                 "Please refresh the private data package before rendering this app."
             )
+
+    shared_dimensions = manifest.get("shared_dimensions") or {}
+    geo_contract = (shared_dimensions.get("geo_reporting_bridge") or {}).get("schema_version")
+    if geo_contract and str(geo_contract) != EXPECTED_GEO_CONTRACT:
+        raise DataLoadError(
+            f"geo_reporting_bridge schema version is {geo_contract}; expected {EXPECTED_GEO_CONTRACT}. "
+            "Please refresh the private data package before rendering this app."
+        )
 
 
 def _load_json(source: DataSource, relative_path: str) -> dict[str, Any]:

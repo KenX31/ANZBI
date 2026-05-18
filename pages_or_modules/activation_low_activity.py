@@ -14,6 +14,7 @@ from charts import (
 )
 from exports import activation_internal_export, activation_provider_export, csv_bytes
 from filters import apply_text_filter, multiselect_filter
+from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
 from metrics import format_int, format_pct, rate, sum_number
 
 
@@ -27,7 +28,10 @@ PRIORITY_LABELS = {
 
 
 def render_activation_page(data: dict[str, object]) -> None:
-    rows = data["rows"].copy()  # type: ignore[index, union-attr]
+    rows = with_reporting_geography(
+        data["rows"].copy(),  # type: ignore[index, union-attr]
+        country_columns=["scope_country", "country_group", "merchant_country_code"],
+    )
     if rows.empty:
         st.warning("No Activation Low-Activity data is available.")
         return
@@ -95,9 +99,9 @@ def render_activation_page(data: dict[str, object]) -> None:
         render_echart(
             horizontal_bar_option(
                 area.head(20),
-                label="business_area",
+                label="geo_reporting_name",
                 value="low_activity_count",
-                title="Top low-activity areas",
+                title="Top low-activity geographies",
                 color=PALETTE["red"],
             ),
             key="chart_act_area_rank",
@@ -112,12 +116,15 @@ def render_activation_page(data: dict[str, object]) -> None:
                 "merchant_id",
                 "merchant_name",
                 "institution_name",
-                "scope_country",
-                "business_city",
-                "business_suburb",
-                "geo_area",
-                "business_cluster",
-                "business_area",
+                "geo_country",
+                "geo_state",
+                "geo_city",
+                "geo_suburb",
+                "geo_postcode",
+                "geo_reporting_level_label",
+                "geo_reporting_name",
+                "nz_geo_area",
+                "nz_business_cluster",
                 "mcc_major_industry",
                 "trade_cnt_prev_3m",
                 "trade_cnt_prev_2m",
@@ -133,13 +140,17 @@ def render_activation_page(data: dict[str, object]) -> None:
 def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     st.sidebar.subheader("Activation Filters")
     filtered = df
+
+    selected_country = multiselect_filter("Country", filtered, "geo_country", key="act_country")
+    if selected_country:
+        filtered = filtered[filtered["geo_country"].astype(str).isin(selected_country)]
+
+    for spec in sidebar_geo_filter_specs(country_scope(filtered)):
+        selected = multiselect_filter(spec.label, filtered, spec.column, key=f"act_{spec.key_suffix}")
+        if selected:
+            filtered = filtered[filtered[spec.column].astype(str).isin(selected)]
+
     for label, column, key in (
-        ("Country", "scope_country", "act_country"),
-        ("City", "business_city", "act_city"),
-        ("Suburb", "business_suburb", "act_suburb"),
-        ("Geo area", "geo_area", "act_geo_area"),
-        ("Cluster", "business_cluster", "act_cluster"),
-        ("Business area", "business_area", "act_business_area"),
         ("Institution", "institution_name", "act_institution"),
         ("Industry", "mcc_major_industry", "act_industry"),
         ("Severity", "decay_band", "act_severity"),
@@ -149,7 +160,11 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
             filtered = filtered[filtered[column].astype(str).isin(selected)]
 
     keyword = st.sidebar.text_input("Merchant / institution keyword", key="act_query")
-    return apply_text_filter(filtered, ["merchant_id", "merchant_name", "institution_name", "business_area"], keyword)
+    return apply_text_filter(
+        filtered,
+        ["merchant_id", "merchant_name", "institution_name", "geo_reporting_name", "geo_city", "geo_suburb"],
+        keyword,
+    )
 
 
 def _normalize_numeric(df: pd.DataFrame) -> pd.DataFrame:
@@ -195,9 +210,12 @@ def _activity_windows(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _area_rollup(df: pd.DataFrame) -> pd.DataFrame:
-    if "business_area" not in df.columns:
+    if "geo_reporting_name" not in df.columns:
         return pd.DataFrame()
-    grouped = df.groupby(["scope_country", "business_area"], dropna=False).agg(
+    working = df.copy()
+    working["geo_reporting_name"] = working["geo_reporting_name"].fillna("").astype(str).str.strip()
+    working.loc[working["geo_reporting_name"] == "", "geo_reporting_name"] = "UNKNOWN"
+    grouped = working.groupby(["geo_country", "geo_reporting_level_label", "geo_reporting_name"], dropna=False).agg(
         merchant_count=("merchant_id", "count"),
         eligible_count=("eligible_low_activity_flag", "sum"),
         low_activity_count=("decay_band", lambda s: s.astype(str).isin(LOW_ACTIVITY_BANDS).sum()),

@@ -4,16 +4,22 @@ from typing import Any
 
 import pandas as pd
 
+from geography import with_reporting_geography
+
 
 NEW_INTAKE_PROVIDER_COLUMNS = [
     "intake_month",
     "商家名",
     "机构",
     "国家",
+    "州/省",
     "所在城市",
     "Suburb",
-    "地理片区",
-    "Cluster",
+    "Postcode",
+    "地理展示层级",
+    "地理展示名称",
+    "NZ地理片区",
+    "NZ Cluster",
     "接入后30天激活状态",
     "详细地址",
     "行业",
@@ -28,6 +34,17 @@ NEW_INTAKE_INTERNAL_COLUMNS = [
     "institution_name",
     "institution_standard",
     "analysis_country",
+    "geo_country",
+    "geo_state",
+    "geo_city",
+    "geo_suburb",
+    "geo_postcode",
+    "geo_reporting_level",
+    "geo_reporting_level_label",
+    "geo_reporting_name",
+    "nz_geo_area",
+    "nz_business_cluster",
+    "au_service_area",
     "business_city",
     "business_suburb",
     "geo_area",
@@ -45,10 +62,15 @@ NEW_INTAKE_INTERNAL_COLUMNS = [
 
 ACTIVATION_PROVIDER_COLUMNS = [
     "商家名",
+    "国家",
+    "州/省",
     "所在城市",
     "Suburb",
-    "地理片区",
-    "Cluster",
+    "Postcode",
+    "地理展示层级",
+    "地理展示名称",
+    "NZ地理片区",
+    "NZ Cluster",
     "铺设优先级",
     "详细地址",
     "行业",
@@ -62,6 +84,17 @@ ACTIVATION_INTERNAL_COLUMNS = [
     "institution_name",
     "institution_group",
     "scope_country",
+    "geo_country",
+    "geo_state",
+    "geo_city",
+    "geo_suburb",
+    "geo_postcode",
+    "geo_reporting_level",
+    "geo_reporting_level_label",
+    "geo_reporting_name",
+    "nz_geo_area",
+    "nz_business_cluster",
+    "au_service_area",
     "business_city",
     "business_suburb",
     "geo_area",
@@ -89,16 +122,24 @@ def csv_bytes(df: pd.DataFrame) -> bytes:
 
 
 def new_intake_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
+    rows = with_reporting_geography(
+        rows,
+        country_columns=["analysis_country", "country_group", "merchant_country_code"],
+    )
     payload = pd.DataFrame(
         {
             "intake_month": _col(rows, "intake_month"),
             "商家名": _first_text(rows, ["merchant_short_name", "merchant_company_name"]),
             "机构": _first_text(rows, ["institution_standard", "institution_name"]),
-            "国家": _first_text(rows, ["analysis_country", "country_group"]),
-            "所在城市": _first_text(rows, ["business_city", "city", "analysis_country"]),
-            "Suburb": _col(rows, "business_suburb"),
-            "地理片区": _col(rows, "geo_area"),
-            "Cluster": _col(rows, "business_cluster"),
+            "国家": _col(rows, "geo_country"),
+            "州/省": _col(rows, "geo_state"),
+            "所在城市": _col(rows, "geo_city"),
+            "Suburb": _col(rows, "geo_suburb"),
+            "Postcode": _col(rows, "geo_postcode"),
+            "地理展示层级": _col(rows, "geo_reporting_level_label"),
+            "地理展示名称": _col(rows, "geo_reporting_name"),
+            "NZ地理片区": _col(rows, "nz_geo_area"),
+            "NZ Cluster": _col(rows, "nz_business_cluster"),
             "接入后30天激活状态": _active_label(_col(rows, "active_30d_flag")),
             "详细地址": _col(rows, "store_address"),
             "行业": _first_text(rows, ["mcc_major_industry", "mcc_code"]),
@@ -108,17 +149,30 @@ def new_intake_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
 
 
 def new_intake_internal_export(rows: pd.DataFrame) -> pd.DataFrame:
+    rows = with_reporting_geography(
+        rows,
+        country_columns=["analysis_country", "country_group", "merchant_country_code"],
+    )
     return _select_existing(rows, NEW_INTAKE_INTERNAL_COLUMNS)
 
 
 def activation_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
+    rows = with_reporting_geography(
+        rows,
+        country_columns=["scope_country", "country_group", "merchant_country_code"],
+    )
     payload = pd.DataFrame(
         {
             "商家名": _first_text(rows, ["merchant_name", "merchant_short_name"]),
-            "所在城市": _first_text(rows, ["business_city", "scope_country"]),
-            "Suburb": _col(rows, "business_suburb"),
-            "地理片区": _col(rows, "geo_area"),
-            "Cluster": _col(rows, "business_cluster"),
+            "国家": _col(rows, "geo_country"),
+            "州/省": _col(rows, "geo_state"),
+            "所在城市": _col(rows, "geo_city"),
+            "Suburb": _col(rows, "geo_suburb"),
+            "Postcode": _col(rows, "geo_postcode"),
+            "地理展示层级": _col(rows, "geo_reporting_level_label"),
+            "地理展示名称": _col(rows, "geo_reporting_name"),
+            "NZ地理片区": _col(rows, "nz_geo_area"),
+            "NZ Cluster": _col(rows, "nz_business_cluster"),
             "铺设优先级": _first_text(rows, ["priority_label", "decay_band"]),
             "详细地址": _first_text(rows, ["address", "normalized_address"]),
             "行业": _first_text(rows, ["mcc_major_industry", "mcc_industry", "mcc_name", "mcc"]),
@@ -128,6 +182,10 @@ def activation_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
 
 
 def activation_internal_export(rows: pd.DataFrame) -> pd.DataFrame:
+    rows = with_reporting_geography(
+        rows,
+        country_columns=["scope_country", "country_group", "merchant_country_code"],
+    )
     return _select_existing(rows, ACTIVATION_INTERNAL_COLUMNS)
 
 
@@ -154,4 +212,3 @@ def _select_existing(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     for column in columns:
         payload[column] = _col(df, column)
     return pd.DataFrame(payload, index=df.index)[columns]
-

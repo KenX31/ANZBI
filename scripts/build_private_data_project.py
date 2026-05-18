@@ -21,12 +21,14 @@ from exports import (  # noqa: E402
     new_intake_internal_export,
     new_intake_provider_export,
 )
+from geography import geo_reporting_bridge_contract, with_reporting_geography  # noqa: E402
 
 
 PROJECT_ID = "anz-bi-platform"
 VERSION = "2026.05.18-v1"
 SCHEMA_VERSION = "1.0"
-EXPORT_CONTRACT_VERSION = "1.0"
+EXPORT_CONTRACT_VERSION = "1.1"
+GEO_CONTRACT_VERSION = "country-aware-1.0"
 
 DEFAULT_NEW_INTAKE_PREPARED = Path(
     r"D:\Tencent\Data analysis\Wechat-Pay-ANZ-MAP\tmp\new-intake-refresh-data\prepared\new-intake"
@@ -53,7 +55,11 @@ NEW_INTAKE_FIELDS = [
     "mcc_code",
     "mcc_major_industry",
     "store_address",
+    "state",
+    "business_state",
     "postcode",
+    "au_service_area",
+    "service_area",
     "business_city",
     "business_suburb",
     "geo_area",
@@ -71,7 +77,11 @@ ACTIVATION_FIELDS = [
     "institution_group",
     "scope_country",
     "address",
+    "state",
+    "business_state",
     "postcode",
+    "au_service_area",
+    "service_area",
     "business_city",
     "business_suburb",
     "geo_area",
@@ -135,11 +145,19 @@ def main() -> int:
     activation_out.mkdir(parents=True, exist_ok=True)
     shared_out.mkdir(parents=True, exist_ok=True)
 
-    new_intake_table = pd.DataFrame([_pick(row, NEW_INTAKE_FIELDS) for row in new_intake_rows])
-    activation_table = pd.DataFrame([_activation_row(row) for row in activation_rows])
+    new_intake_table = with_reporting_geography(
+        pd.DataFrame([_pick(row, NEW_INTAKE_FIELDS) for row in new_intake_rows]),
+        country_columns=["analysis_country", "country_group", "merchant_country_code"],
+    )
+    activation_table = with_reporting_geography(
+        pd.DataFrame([_activation_row(row) for row in activation_rows]),
+        country_columns=["scope_country", "country_group", "merchant_country_code"],
+    )
+    geo_bridge = geo_reporting_bridge_contract()
 
     _write_dataframe_csv(new_intake_out / "new_intake_rows.csv", new_intake_table)
     _write_dataframe_csv(activation_out / "activation_candidates.csv", activation_table)
+    _write_dataframe_csv(shared_out / "geo_reporting_bridge.csv", geo_bridge)
     _write_rollup_json_as_csv(
         new_intake_prepared / "new_intake_institution_rollup.json",
         new_intake_out / "new_intake_institution_rollup.csv",
@@ -205,12 +223,23 @@ def main() -> int:
                 },
             },
         },
+        "shared_dimensions": {
+            "geo_reporting_bridge": {
+                "schema_version": GEO_CONTRACT_VERSION,
+                "privacy_level": "non_sensitive_contract",
+                "row_count": len(geo_bridge),
+                "files": {
+                    "bridge": "processed/shared_dimensions/geo_reporting_bridge.csv",
+                },
+            },
+        },
         "guardrails": [
             "No raw exports, Excel workbooks, SQLite databases, local secrets, contact, bank, legal representative, director, shareholder, UBO, or certificate fields.",
             "Provider exports exclude merchant_id, institution_id, candidate_rank, and other internal identifiers.",
             "Internal record exports include merchant_id and institution_id for system lookup and must remain inside Tencent/internal handling.",
             "New Intake txn_count_30d and txn_amount_30d mean first 30 days after onboarding, not market-wide rolling 30 days.",
             "Activation is region-first; coordinates are optional and not required for the first Streamlit release.",
+            "AU and NZ do not share the same business geography hierarchy. Streamlit uses geo_reporting_level/name as the shared interface and keeps NZ geo_area/cluster country-specific.",
         ],
     }
     (output_root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -291,4 +320,3 @@ def _new_intake_source_period(summary: dict[str, Any]) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
