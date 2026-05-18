@@ -8,21 +8,16 @@ from geography import with_reporting_geography
 
 
 NEW_INTAKE_PROVIDER_COLUMNS = [
-    "intake_month",
     "商家名",
-    "机构",
-    "国家",
-    "州/省",
     "所在城市",
     "Suburb",
+    "州/省",
     "Postcode",
-    "地理展示层级",
-    "地理展示名称",
     "NZ地理片区",
-    "NZ Cluster",
     "接入后30天激活状态",
+    "intake_month",
     "详细地址",
-    "行业",
+    "行业展示",
 ]
 
 NEW_INTAKE_INTERNAL_COLUMNS = [
@@ -39,11 +34,8 @@ NEW_INTAKE_INTERNAL_COLUMNS = [
     "geo_city",
     "geo_suburb",
     "geo_postcode",
-    "geo_reporting_level",
-    "geo_reporting_level_label",
     "geo_reporting_name",
     "nz_geo_area",
-    "nz_business_cluster",
     "au_service_area",
     "business_city",
     "business_suburb",
@@ -67,13 +59,12 @@ ACTIVATION_PROVIDER_COLUMNS = [
     "所在城市",
     "Suburb",
     "Postcode",
-    "地理展示层级",
     "地理展示名称",
     "NZ地理片区",
     "NZ Cluster",
     "服务商跟进级别",
     "详细地址",
-    "行业",
+    "行业展示",
 ]
 
 ACTIVATION_INTERNAL_COLUMNS = [
@@ -89,8 +80,6 @@ ACTIVATION_INTERNAL_COLUMNS = [
     "geo_city",
     "geo_suburb",
     "geo_postcode",
-    "geo_reporting_level",
-    "geo_reporting_level_label",
     "geo_reporting_name",
     "nz_geo_area",
     "nz_business_cluster",
@@ -130,22 +119,17 @@ def new_intake_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
         {
             "intake_month": _col(rows, "intake_month"),
             "商家名": _first_text(rows, ["merchant_short_name", "merchant_company_name"]),
-            "机构": _first_text(rows, ["institution_standard", "institution_name"]),
-            "国家": _col(rows, "geo_country"),
             "州/省": _col(rows, "geo_state"),
             "所在城市": _col(rows, "geo_city"),
             "Suburb": _col(rows, "geo_suburb"),
             "Postcode": _col(rows, "geo_postcode"),
-            "地理展示层级": _col(rows, "geo_reporting_level_label"),
-            "地理展示名称": _col(rows, "geo_reporting_name"),
             "NZ地理片区": _col(rows, "nz_geo_area"),
-            "NZ Cluster": _col(rows, "nz_business_cluster"),
             "接入后30天激活状态": _active_label(_col(rows, "active_30d_flag")),
             "详细地址": _col(rows, "store_address"),
-            "行业": _first_text(rows, ["mcc_major_industry", "mcc_code"]),
+            "行业展示": _first_text(rows, ["mcc_major_industry", "mcc_code"]),
         }
     )
-    return payload[NEW_INTAKE_PROVIDER_COLUMNS]
+    return _select_nonempty(payload, NEW_INTAKE_PROVIDER_COLUMNS)
 
 
 def new_intake_internal_export(rows: pd.DataFrame) -> pd.DataFrame:
@@ -153,7 +137,7 @@ def new_intake_internal_export(rows: pd.DataFrame) -> pd.DataFrame:
         rows,
         country_columns=["analysis_country", "country_group", "merchant_country_code"],
     )
-    return _select_existing(rows, NEW_INTAKE_INTERNAL_COLUMNS)
+    return _select_existing(rows, NEW_INTAKE_INTERNAL_COLUMNS, drop_empty=True)
 
 
 def activation_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
@@ -169,16 +153,15 @@ def activation_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
             "所在城市": _col(rows, "geo_city"),
             "Suburb": _col(rows, "geo_suburb"),
             "Postcode": _col(rows, "geo_postcode"),
-            "地理展示层级": _col(rows, "geo_reporting_level_label"),
             "地理展示名称": _col(rows, "geo_reporting_name"),
             "NZ地理片区": _col(rows, "nz_geo_area"),
             "NZ Cluster": _col(rows, "nz_business_cluster"),
             "服务商跟进级别": _first_text(rows, ["priority_label", "decay_band"]),
             "详细地址": _first_text(rows, ["address", "normalized_address"]),
-            "行业": _first_text(rows, ["mcc_major_industry", "mcc_industry", "mcc_name", "mcc"]),
+            "行业展示": _first_text(rows, ["mcc_major_industry", "mcc_industry", "mcc_name", "mcc"]),
         }
     )
-    return payload[ACTIVATION_PROVIDER_COLUMNS]
+    return _select_nonempty(payload, ACTIVATION_PROVIDER_COLUMNS)
 
 
 def activation_internal_export(rows: pd.DataFrame) -> pd.DataFrame:
@@ -186,7 +169,7 @@ def activation_internal_export(rows: pd.DataFrame) -> pd.DataFrame:
         rows,
         country_columns=["scope_country", "country_group", "merchant_country_code"],
     )
-    return _select_existing(rows, ACTIVATION_INTERNAL_COLUMNS)
+    return _select_existing(rows, ACTIVATION_INTERNAL_COLUMNS, drop_empty=True)
 
 
 def _col(df: pd.DataFrame, name: str) -> pd.Series:
@@ -207,8 +190,27 @@ def _active_label(values: pd.Series) -> pd.Series:
     return values.astype(str).map(lambda value: "已激活" if value in {"1", "1.0", "true", "True"} else "未激活")
 
 
-def _select_existing(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+def _select_existing(df: pd.DataFrame, columns: list[str], *, drop_empty: bool = False) -> pd.DataFrame:
     payload: dict[str, Any] = {}
     for column in columns:
         payload[column] = _col(df, column)
-    return pd.DataFrame(payload, index=df.index)[columns]
+    frame = pd.DataFrame(payload, index=df.index)[columns]
+    if drop_empty:
+        return frame[_nonempty_columns(frame, columns)]
+    return frame
+
+
+def _select_nonempty(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    frame = df[columns]
+    return frame[_nonempty_columns(frame, columns)]
+
+
+def _nonempty_columns(df: pd.DataFrame, columns: list[str]) -> list[str]:
+    if df.empty:
+        return columns
+    return [column for column in columns if not _is_blank_series(df[column])]
+
+
+def _is_blank_series(values: pd.Series) -> bool:
+    text = values.fillna("").astype(str).str.strip()
+    return bool(text.eq("").all())

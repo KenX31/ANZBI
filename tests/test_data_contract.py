@@ -232,6 +232,8 @@ def test_new_intake_provider_export_excludes_internal_ids() -> None:
                 "institution_standard": "Demo PSP",
                 "analysis_country": "NZ",
                 "business_city": "Auckland",
+                "business_suburb": "CBD",
+                "postcode": "1010",
                 "geo_area": "Auckland Central",
                 "business_cluster": "CBD",
                 "active_30d_flag": 1,
@@ -244,10 +246,26 @@ def test_new_intake_provider_export_excludes_internal_ids() -> None:
     internal = new_intake_internal_export(rows)
     assert "merchant_id" not in provider.columns
     assert "institution_id" not in provider.columns
+    assert "机构" not in provider.columns
+    assert "国家" not in provider.columns
+    assert "地理展示层级" not in provider.columns
+    assert "NZ Cluster" not in provider.columns
+    assert "州/省" not in provider.columns
+    assert provider.columns.tolist() == [
+        "商家名",
+        "所在城市",
+        "Suburb",
+        "Postcode",
+        "NZ地理片区",
+        "接入后30天激活状态",
+        "intake_month",
+        "详细地址",
+        "行业展示",
+    ]
     assert "merchant_id" in internal.columns
     assert internal.loc[0, "merchant_id"] == "456"
     assert provider.loc[0, "接入后30天激活状态"] == "已激活"
-    assert provider.loc[0, "地理展示名称"] == "Auckland Central"
+    assert provider.loc[0, "NZ地理片区"] == "Auckland Central"
 
 
 def test_activation_provider_export_excludes_internal_ids() -> None:
@@ -258,7 +276,10 @@ def test_activation_provider_export_excludes_internal_ids() -> None:
                 "institution_id": "psp2",
                 "candidate_rank": 8,
                 "merchant_name": "Demo Merchant",
+                "scope_country": "NZ",
                 "business_city": "Auckland",
+                "business_suburb": "CBD",
+                "geo_area": "Auckland Central",
                 "priority_label": "严重下滑",
                 "address": "Demo address",
                 "mcc_major_industry": "餐饮类",
@@ -270,9 +291,74 @@ def test_activation_provider_export_excludes_internal_ids() -> None:
     assert "merchant_id" not in provider.columns
     assert "institution_id" not in provider.columns
     assert "candidate_rank" not in provider.columns
+    assert "地理展示层级" not in provider.columns
+    assert "州/省" not in provider.columns
     assert "服务商跟进级别" in provider.columns
+    assert "geo_reporting_level" not in internal.columns
+    assert "geo_reporting_level_label" not in internal.columns
     assert "merchant_id" in internal.columns
     assert "candidate_rank" in internal.columns
+
+
+def test_new_intake_provider_export_uses_au_columns_without_nz_area() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "merchant_id": "789",
+                "intake_month": "2026.03",
+                "merchant_short_name": "Sydney Shop",
+                "analysis_country": "AU",
+                "state": "NSW",
+                "business_city": "Sydney",
+                "business_suburb": "Haymarket",
+                "postcode": "2000",
+                "active_30d_flag": 0,
+                "store_address": "Demo address",
+                "mcc_major_industry": "餐饮类",
+            }
+        ]
+    )
+
+    provider = new_intake_provider_export(rows)
+
+    assert "州/省" in provider.columns
+    assert "NZ地理片区" not in provider.columns
+    assert "NZ Cluster" not in provider.columns
+    assert provider.loc[0, "州/省"] == "NSW"
+    assert provider.loc[0, "接入后30天激活状态"] == "未激活"
+
+
+def test_activation_provider_export_keeps_mixed_country_specific_columns() -> None:
+    rows = pd.DataFrame(
+        [
+            {
+                "merchant_id": "nz",
+                "merchant_name": "NZ Merchant",
+                "scope_country": "NZ",
+                "business_city": "Auckland",
+                "business_suburb": "CBD",
+                "geo_area": "Auckland Central",
+                "priority_label": "严重下滑",
+            },
+            {
+                "merchant_id": "au",
+                "merchant_name": "AU Merchant",
+                "scope_country": "AU",
+                "state": "NSW",
+                "business_city": "Sydney",
+                "business_suburb": "Haymarket",
+                "priority_label": "明显下滑",
+            },
+        ]
+    )
+
+    provider = activation_provider_export(rows)
+
+    assert "地理展示层级" not in provider.columns
+    assert "州/省" in provider.columns
+    assert "NZ地理片区" in provider.columns
+    assert provider.loc[0, "NZ地理片区"] == "Auckland Central"
+    assert provider.loc[1, "州/省"] == "NSW"
 
 
 def test_amount_columns_are_scaled_from_minor_units() -> None:
