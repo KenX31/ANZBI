@@ -21,7 +21,7 @@ from auth import (
 )
 from charts import combo_line_bar_option, donut_option, horizontal_bar_option
 from charts import combo_bar_count_line_option
-from data_loader import DataLoadError, _normalize_amount_units, _read_csv_text, validate_project
+from data_loader import DataLoadError, _append_ka_segment, _normalize_amount_units, _read_csv_text, validate_project
 from exports import (
     activation_internal_export,
     activation_provider_export,
@@ -30,6 +30,7 @@ from exports import (
 )
 from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
+from filters import KA_SCOPE_EXCLUDE, KA_SCOPE_ONLY, apply_ka_scope
 from pages_or_modules.new_intake import (
     ONLINE_SCOPE_EXCLUDE,
     _apply_online_scope,
@@ -182,6 +183,50 @@ def test_auth_authorization_accepts_allowed_users_and_domains() -> None:
     assert check_user(None, {"userPrincipalName": "allowed@example.com"}) is True
     assert check_user(None, {"mail": "analyst@partner.example"}) is True
     assert isinstance(check_user(None, {"mail": "blocked@example.com"}), str)
+
+
+def test_ka_dimension_marks_matching_merchants_and_defaults_smb() -> None:
+    rows = pd.DataFrame(
+        [
+            {"merchant_id": "100", "merchant_short_name": "KA Shop"},
+            {"merchant_id": "200", "merchant_short_name": "SMB Shop"},
+        ]
+    )
+    ka_dimension = pd.DataFrame(
+        [
+            {
+                "ka_mid": "100",
+                "is_ka": "1",
+                "merchant_segment": "KA",
+                "country_group": "NZ",
+                "ka_group": "Demo Group",
+                "ka_brand": "Demo Brand",
+                "ka_institution": "Demo PSP",
+            }
+        ]
+    )
+
+    annotated = _append_ka_segment(rows, ka_dimension)
+
+    assert annotated["merchant_segment"].tolist() == ["KA", "SMB"]
+    assert annotated["is_ka"].tolist() == [1, 0]
+    assert annotated.loc[0, "ka_group"] == "Demo Group"
+    assert annotated.loc[1, "ka_group"] == ""
+
+
+def test_ka_scope_filter_can_keep_or_exclude_ka() -> None:
+    rows = pd.DataFrame(
+        {
+            "merchant_id": ["ka", "smb"],
+            "merchant_segment": ["KA", "SMB"],
+        }
+    )
+
+    only_ka = apply_ka_scope(rows, KA_SCOPE_ONLY)
+    excluded = apply_ka_scope(rows, KA_SCOPE_EXCLUDE)
+
+    assert only_ka["merchant_id"].tolist() == ["ka"]
+    assert excluded["merchant_id"].tolist() == ["smb"]
 
 
 def test_manifest_schema_guard_accepts_expected_versions() -> None:

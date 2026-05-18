@@ -13,7 +13,7 @@ from charts import (
     treemap_option,
 )
 from exports import activation_internal_export, activation_provider_export, csv_bytes
-from filters import apply_text_filter, disabled_multiselect_filter, mapped_multiselect_filter, multiselect_filter, options
+from filters import apply_text_filter, disabled_multiselect_filter, ka_scope_filter, mapped_multiselect_filter, multiselect_filter, options
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
 from metrics import format_int, format_pct, rate, sum_number
 from ui_labels import COUNTRY_LABELS, DECAY_BAND_LABELS, WINDOW_LABELS, display_table, label_value
@@ -181,6 +181,8 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     selected_country = mapped_multiselect_filter("国家", filtered, "geo_country", key="act_country", value_map=COUNTRY_LABELS)
     if selected_country:
         filtered = filtered[filtered["geo_country"].astype(str).isin(selected_country)]
+
+    filtered = ka_scope_filter(filtered, key="act_ka_scope")
 
     filtered = _apply_geo_filters(filtered)
 

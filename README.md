@@ -152,6 +152,7 @@ DATA_GITHUB_REPO = "KenX31/anzdata"
 DATA_GITHUB_REF = "main"
 DATA_PROJECT = "anz-bi-platform"
 DATA_GEO_PROJECT = "anz-geography"
+DATA_KA_PROJECT = "anz-ka-dimension"
 DATA_AMOUNT_UNIT = "minor"
 DATA_GITHUB_TOKEN = "..."
 ```
@@ -270,6 +271,11 @@ projects/anz-geography/
 The app reads BI page rows from `DATA_PROJECT` and the reviewed geo dimensions from
 `DATA_GEO_PROJECT`. If the BI page rows do not include `staging_*` columns, the app
 loads `projects/anz-geography/processed/*.csv` and applies the matcher at runtime.
+
+The KA / SMB sidebar filter reads the shared KA merchant MID dimension from
+`DATA_KA_PROJECT`, defaulting to `projects/anz-ka-dimension/processed/dim_ka_merchant_anz.csv`.
+Rows whose `merchant_id` appears as `ka_mid` are treated as `KA`; all other rows are
+treated as `SMB`.
 
 ## Streamlit Geo Staging Check
 

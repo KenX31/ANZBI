@@ -8,6 +8,11 @@ import streamlit as st
 from ui_labels import label_value
 
 
+KA_SCOPE_ALL = "全部商户"
+KA_SCOPE_ONLY = "只看KA"
+KA_SCOPE_EXCLUDE = "剔除KA"
+
+
 def options(df: pd.DataFrame, column: str) -> list[str]:
     if column not in df.columns:
         return []
@@ -78,6 +83,35 @@ def apply_text_filter(df: pd.DataFrame, columns: list[str], query: str) -> pd.Da
         if column in df.columns:
             mask = mask | df[column].fillna("").astype(str).str.casefold().str.contains(query, regex=False)
     return df[mask]
+
+
+def ka_scope_filter(df: pd.DataFrame, *, key: str) -> pd.DataFrame:
+    if "merchant_segment" not in df.columns and "is_ka" not in df.columns:
+        return df
+    scope = st.sidebar.selectbox(
+        "KA/SMB范围",
+        (KA_SCOPE_ALL, KA_SCOPE_ONLY, KA_SCOPE_EXCLUDE),
+        key=key,
+        help="KA 来自共享 KA MID 维表；剔除 KA 后即为 SMB/非 KA 商户。",
+    )
+    return apply_ka_scope(df, scope)
+
+
+def apply_ka_scope(df: pd.DataFrame, scope: str) -> pd.DataFrame:
+    if scope == KA_SCOPE_ALL:
+        return df
+    if "merchant_segment" in df.columns:
+        segment = df["merchant_segment"].fillna("").astype(str).str.upper()
+        is_ka = segment.eq("KA")
+    elif "is_ka" in df.columns:
+        is_ka = pd.to_numeric(df["is_ka"], errors="coerce").fillna(0).astype(int).eq(1)
+    else:
+        return df
+    if scope == KA_SCOPE_ONLY:
+        return df[is_ka]
+    if scope == KA_SCOPE_EXCLUDE:
+        return df[~is_ka]
+    return df
 
 
 def number(value: object) -> float:

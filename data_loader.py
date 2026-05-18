@@ -17,15 +17,26 @@ from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
 
 PROJECT_ID = "anz-bi-platform"
 GEO_PROJECT_ID = "anz-geography"
+KA_PROJECT_ID = "anz-ka-dimension"
 DEFAULT_LOCAL_PROJECT_ROOT = Path(r"D:\Tencent\Data analysis\anzdata-worktree\projects\anz-bi-platform")
 DEFAULT_LOCAL_GEO_STAGING_ROOT = Path(
     r"D:\Tencent\Data analysis\ANZ_Data_Warehouse\data\Geo_warehouse_streamlit_staging"
 )
 REMOTE_GEO_ROOT = "processed"
-CSV_DTYPES = {"intake_month": "string"}
+CSV_DTYPES = {
+    "intake_month": "string",
+    "snapshot_ds": "string",
+    "merchant_id": "string",
+    "institution_id": "string",
+    "merchant_country_code": "string",
+    "mcc_code": "string",
+    "mcc": "string",
+    "ka_mid": "string",
+}
 EXPECTED_SCHEMA = {
     "new_intake": "1.0",
     "activation_low_activity": "1.0",
+    "silent_merchants": "1.0",
 }
 EXPECTED_GEO_CONTRACT = "country-aware-1.0"
 
@@ -43,6 +54,7 @@ class DataSource:
     github_ref: str = "main"
     github_project: str = PROJECT_ID
     github_geo_project: str = GEO_PROJECT_ID
+    github_ka_project: str = KA_PROJECT_ID
     github_token: str = ""
     amount_unit: str = "minor"
 
@@ -75,6 +87,7 @@ def resolve_data_source() -> DataSource:
         github_ref=_secret_or_env("DATA_GITHUB_REF", "main"),
         github_project=_secret_or_env("DATA_PROJECT", PROJECT_ID),
         github_geo_project=_secret_or_env("DATA_GEO_PROJECT", GEO_PROJECT_ID),
+        github_ka_project=_secret_or_env("DATA_KA_PROJECT", KA_PROJECT_ID),
         github_token=_secret_or_env("DATA_GITHUB_TOKEN", ""),
         amount_unit=_secret_or_env("DATA_AMOUNT_UNIT", "minor").strip().lower(),
     )
@@ -83,16 +96,21 @@ def resolve_data_source() -> DataSource:
 def load_project_data() -> dict[str, Any]:
     source = resolve_data_source()
     manifest = _load_json(source, "manifest.json")
-    data_version = str(manifest.get("version") or "")
+    ka_manifest = _load_project_json_optional(source, source.github_ka_project, "manifest.json")
+    data_version = f"{manifest.get('version') or ''}|ka:{ka_manifest.get('version') or ''}"
     project = _load_project_data_cached(source, data_version)
     return {"manifest": manifest, **project}
 
 
 @st.cache_data(show_spinner=False)
 def _load_project_data_cached(source: DataSource, data_version: str) -> dict[str, Any]:
+    ka_dimension = _load_ka_dimension(source)
     return {
         "new_intake": {
-            "rows": _load_page_rows(source, "processed/new_intake/new_intake_rows.csv"),
+            "rows": _append_ka_segment(
+                _load_page_rows(source, "processed/new_intake/new_intake_rows.csv"),
+                ka_dimension,
+            ),
             "summary": _load_json(source, "processed/new_intake/new_intake_summary.json"),
             "institution_rollup": _load_frame(source, "processed/new_intake/new_intake_institution_rollup.csv"),
             "export_rows": _load_frame(source, "processed/new_intake/new_intake_export.csv"),
@@ -100,15 +118,30 @@ def _load_project_data_cached(source: DataSource, data_version: str) -> dict[str
             "internal_export_rows": _load_frame_optional(source, "processed/new_intake/new_intake_internal_record_export.csv"),
         },
         "activation_low_activity": {
-            "rows": _load_page_rows(source, "processed/activation_low_activity/activation_candidates.csv"),
+            "rows": _append_ka_segment(
+                _load_page_rows(source, "processed/activation_low_activity/activation_candidates.csv"),
+                ka_dimension,
+            ),
             "summary": _load_json(source, "processed/activation_low_activity/low_activity_bi_summary.json"),
             "area_rollup": _load_frame(source, "processed/activation_low_activity/area_low_activity_rollup.csv"),
             "export_rows": _load_frame(source, "processed/activation_low_activity/activation_export.csv"),
             "provider_export_rows": _load_frame_optional(source, "processed/activation_low_activity/activation_provider_export.csv"),
             "internal_export_rows": _load_frame_optional(source, "processed/activation_low_activity/activation_internal_record_export.csv"),
         },
+        "silent_merchants": {
+            "rows": _append_ka_segment(
+                _load_page_rows(source, "processed/silent_merchants/silent_merchants_rows.csv"),
+                ka_dimension,
+            ),
+            "summary": _load_json(source, "processed/silent_merchants/silent_merchants_summary.json"),
+            "aggregate": _load_frame(source, "processed/silent_merchants/silent_merchants_aggregate.csv"),
+            "export_rows": _load_frame(source, "processed/silent_merchants/silent_merchants_provider_export.csv"),
+            "provider_export_rows": _load_frame_optional(source, "processed/silent_merchants/silent_merchants_provider_export.csv"),
+            "internal_export_rows": _load_frame_optional(source, "processed/silent_merchants/silent_merchants_internal_record_export.csv"),
+        },
         "shared_dimensions": {
             "geo_reporting_bridge": _load_frame_optional(source, "processed/shared_dimensions/geo_reporting_bridge.csv"),
+            "ka_merchants": ka_dimension,
         },
     }
 
@@ -220,6 +253,101 @@ def _load_geo_frame_optional(source: DataSource, relative_path: str) -> pd.DataF
     return pd.read_csv(StringIO(text))
 
 
+def _load_ka_dimension(source: DataSource) -> pd.DataFrame:
+    frame = _load_project_frame_optional(source, source.github_ka_project, "processed/dim_ka_merchant_anz.csv")
+    if frame.empty:
+        return pd.DataFrame(columns=["ka_mid", "is_ka", "merchant_segment"])
+    out = frame.copy()
+    out["ka_mid"] = out["ka_mid"].fillna("").astype(str).str.strip()
+    out = out[out["ka_mid"] != ""]
+    out = out.drop_duplicates("ka_mid", keep="first")
+    return out
+
+
+def _append_ka_segment(rows: pd.DataFrame, ka_dimension: pd.DataFrame) -> pd.DataFrame:
+    out = rows.copy()
+    for column in (
+        "is_ka",
+        "merchant_segment",
+        "ka_mid",
+        "ka_country_group",
+        "ka_group",
+        "ka_brand",
+        "ka_institution",
+    ):
+        if column in out.columns:
+            out = out.drop(columns=column)
+    if "merchant_id" not in out.columns or out.empty or ka_dimension.empty:
+        return _with_default_smb_segment(out)
+
+    dim_columns = [
+        column
+        for column in (
+            "ka_mid",
+            "is_ka",
+            "merchant_segment",
+            "country_group",
+            "ka_group",
+            "ka_brand",
+            "ka_institution",
+        )
+        if column in ka_dimension.columns
+    ]
+    dim = ka_dimension[dim_columns].copy()
+    dim["ka_mid"] = dim["ka_mid"].fillna("").astype(str).str.strip()
+    dim = dim[dim["ka_mid"] != ""].drop_duplicates("ka_mid", keep="first")
+    dim["_merchant_id_join"] = dim["ka_mid"]
+    dim = dim.rename(columns={"country_group": "ka_country_group"})
+
+    out["_merchant_id_join"] = out["merchant_id"].fillna("").astype(str).str.strip()
+    out = out.merge(dim, how="left", on="_merchant_id_join")
+    out = out.drop(columns="_merchant_id_join")
+    out["ka_mid"] = out["ka_mid"].fillna("") if "ka_mid" in out.columns else ""
+    is_ka = out["is_ka"] if "is_ka" in out.columns else pd.Series([0] * len(out), index=out.index)
+    out["is_ka"] = pd.to_numeric(is_ka, errors="coerce").fillna(0).astype(int)
+    out["merchant_segment"] = out["merchant_segment"].fillna("").astype(str)
+    out.loc[out["is_ka"].eq(1), "merchant_segment"] = "KA"
+    out.loc[~out["is_ka"].eq(1), "merchant_segment"] = "SMB"
+    for column in ("ka_country_group", "ka_group", "ka_brand", "ka_institution"):
+        if column in out.columns:
+            out[column] = out[column].fillna("").astype(str)
+        else:
+            out[column] = ""
+    return out
+
+
+def _with_default_smb_segment(rows: pd.DataFrame) -> pd.DataFrame:
+    out = rows.copy()
+    out["is_ka"] = 0
+    out["merchant_segment"] = "SMB"
+    out["ka_mid"] = ""
+    out["ka_country_group"] = ""
+    out["ka_group"] = ""
+    out["ka_brand"] = ""
+    out["ka_institution"] = ""
+    return out
+
+
+def _load_project_json_optional(source: DataSource, project: str, relative_path: str) -> dict[str, Any]:
+    try:
+        text = _read_project_text(source, project, relative_path)
+    except DataLoadError:
+        return {}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_project_frame_optional(source: DataSource, project: str, relative_path: str) -> pd.DataFrame:
+    try:
+        text = _read_project_text(source, project, relative_path)
+    except DataLoadError:
+        return pd.DataFrame()
+    return _read_csv_text(text)
+
+
 def _read_csv_path(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, dtype=CSV_DTYPES)
 
@@ -248,23 +376,33 @@ def _is_amount_column(column: str) -> bool:
 
 
 def _read_text(source: DataSource, relative_path: str) -> str:
+    return _read_project_text(source, source.github_project, relative_path)
+
+
+def _read_project_text(source: DataSource, project: str, relative_path: str) -> str:
     if source.backend == "local":
-        path = _local_path(source, relative_path)
+        path = _local_project_path(source, project, relative_path)
         if not path.exists():
             raise DataLoadError(f"Missing local data file: {path}")
         return path.read_text(encoding="utf-8-sig")
     if source.backend == "github_private":
-        return _read_github_project_text(source, source.github_project, relative_path)
+        return _read_github_project_text(source, project, relative_path)
     raise DataLoadError(f"Unsupported DATA_BACKEND: {source.backend}")
 
 
 def _local_path(source: DataSource, relative_path: str) -> Path:
+    return _local_project_path(source, source.github_project, relative_path)
+
+
+def _local_project_path(source: DataSource, project: str, relative_path: str) -> Path:
     root = source.local_root
     if root is None:
         raise DataLoadError(
             "LOCAL_DATA_ROOT is required when DATA_BACKEND=local. "
             f"Expected local project root like {DEFAULT_LOCAL_PROJECT_ROOT}."
         )
+    if project != source.github_project:
+        root = root.parent / project
     return root / relative_path
 
 
