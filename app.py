@@ -8,7 +8,7 @@ from pages_or_modules.new_intake import render_new_intake_page
 
 
 st.set_page_config(
-    page_title="ANZ BI Portal",
+    page_title="ANZ BI 门户",
     page_icon="ANZ",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -17,8 +17,8 @@ st.set_page_config(
 
 def main() -> None:
     _apply_brand_theme()
-    st.title("ANZ BI Portal")
-    st.caption("New Intake and Activation Low-Activity BI")
+    st.title("ANZ BI 门户")
+    st.caption("新进件与活跃低洼 BI")
 
     try:
         project = load_project_data()
@@ -28,17 +28,17 @@ def main() -> None:
         st.stop()
 
     manifest = project["manifest"]
-    st.sidebar.header("BI Navigation")
+    st.sidebar.header("BI 导航")
     page = st.sidebar.radio(
-        "Page",
-        ("New Intake", "Activation Low-Activity"),
+        "页面",
+        ("新进件", "活跃低洼"),
         label_visibility="collapsed",
     )
     st.sidebar.caption(
-        f"Data version {manifest.get('version', '-')}; generated {manifest.get('generated_at', '-')}"
+        f"数据版本 {manifest.get('version', '-')}；生成时间 {manifest.get('generated_at', '-')}"
     )
 
-    if page == "New Intake":
+    if page == "新进件":
         render_new_intake_page(project["new_intake"])
     else:
         render_activation_page(project["activation_low_activity"])

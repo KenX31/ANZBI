@@ -227,7 +227,7 @@ def treemap_option(df: pd.DataFrame, *, label: str, value: str, title: str) -> d
     }
 
 
-def empty_chart(message: str = "No data for this chart.") -> None:
+def empty_chart(message: str = "当前筛选下没有可展示的数据。") -> None:
     st.info(message)
 
 

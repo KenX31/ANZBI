@@ -14,15 +14,16 @@ from charts import (
     treemap_option,
 )
 from exports import csv_bytes, new_intake_internal_export, new_intake_provider_export
-from filters import apply_text_filter, disabled_multiselect_filter, multiselect_filter, options
+from filters import apply_text_filter, disabled_multiselect_filter, mapped_multiselect_filter, multiselect_filter, options
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
 from metrics import count_flag, format_int, format_pct, rate, sum_number
+from ui_labels import CHANNEL_LABELS, COUNTRY_LABELS, display_table, label_value
 
 
 DEFAULT_MONTH_WINDOW = 6
-ONLINE_SCOPE_EXCLUDE = "Exclude ONLINE"
-ONLINE_SCOPE_ALL = "All channels"
-ONLINE_SCOPE_ONLY = "Only ONLINE"
+ONLINE_SCOPE_EXCLUDE = "排除线上"
+ONLINE_SCOPE_ALL = "全部渠道"
+ONLINE_SCOPE_ONLY = "只看线上"
 
 
 def render_new_intake_page(data: dict[str, object]) -> None:
@@ -31,13 +32,13 @@ def render_new_intake_page(data: dict[str, object]) -> None:
         country_columns=["analysis_country", "country_group", "merchant_country_code"],
     )
     if rows.empty:
-        st.warning("No New Intake data is available.")
+        st.warning("没有可用的新进件数据。")
         return
 
-    st.header("New Intake")
-    st.caption("Cohort view: activation means the merchant traded within 30 days after onboarding.")
+    st.header("新进件")
+    st.caption("进件月口径：激活表示商户在接入后 30 天内产生交易。")
     st.info(
-        "默认视图：最近 6 个 cohort 月，已排除 Zhenxing 和 ONLINE；如需查看完整口径，可在左侧筛选器调整。"
+        "默认视图：最近 6 个进件月，已排除振兴商户和线上商户；如需查看完整口径，可在左侧筛选器调整。"
     )
 
     filtered = _sidebar_filters(rows)
@@ -48,13 +49,13 @@ def render_new_intake_page(data: dict[str, object]) -> None:
     latest_month = _latest_month(filtered) if total else "-"
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Merchants", format_int(total))
-    c2.metric("30d Active", format_pct(rate(active, total)))
-    c3.metric("Latest", str(latest_month))
-    c4.metric("30d Txns", format_int(sum_number(filtered, "txn_count_30d")))
+    c1.metric("商户数", format_int(total))
+    c2.metric("30天激活率", format_pct(rate(active, total)))
+    c3.metric("最新月份", str(latest_month))
+    c4.metric("30天交易笔数", format_int(sum_number(filtered, "txn_count_30d")))
 
     if filtered.empty:
-        st.info("No merchants match the current filters.")
+        st.info("当前筛选下没有匹配商户。")
         return
 
     provider_export = new_intake_provider_export(filtered)
@@ -73,7 +74,7 @@ def render_new_intake_page(data: dict[str, object]) -> None:
         "text/csv",
     )
 
-    tab_overview, tab_institutions, tab_merchants = st.tabs(["Overview", "Institutions", "Merchants"])
+    tab_overview, tab_institutions, tab_merchants = st.tabs(["总览", "机构", "商户明细"])
     with tab_overview:
         monthly = _monthly_trend(filtered)
         render_echart(
@@ -82,9 +83,9 @@ def render_new_intake_page(data: dict[str, object]) -> None:
                 x="intake_month",
                 bar_y="merchant_count",
                 line_y="active_30d_rate",
-                title="Monthly intake and 30d activation",
-                bar_name="Intake",
-                line_name="30d active rate",
+                title="月度进件与30天激活率",
+                bar_name="进件商户数",
+                line_name="30天激活率",
             ),
             key="chart_ni_monthly_combo",
             height=390,
@@ -99,7 +100,7 @@ def render_new_intake_page(data: dict[str, object]) -> None:
                     country_month,
                     category="intake_month",
                     value_columns=[col for col in country_month.columns if col != "intake_month"],
-                    title="Monthly intake by country",
+                    title="按国家月度进件",
                 ),
                 key="chart_ni_country_stack",
                 height=360,
@@ -107,11 +108,11 @@ def render_new_intake_page(data: dict[str, object]) -> None:
 
         c1, c2 = st.columns(2)
         with c1:
-            channel = _distribution(filtered, "channel_type")
-            render_echart(donut_option(channel, label="label", value="count", title="Channel"), key="chart_ni_channel", height=330)
+            channel = _distribution(filtered, "channel_type", value_map=CHANNEL_LABELS)
+            render_echart(donut_option(channel, label="label", value="count", title="渠道分布"), key="chart_ni_channel", height=330)
         with c2:
             industry = _distribution(filtered, "mcc_major_industry").head(14)
-            render_echart(treemap_option(industry, label="label", value="count", title="Industry mix"), key="chart_ni_industry", height=330)
+            render_echart(treemap_option(industry, label="label", value="count", title="行业分布"), key="chart_ni_industry", height=330)
 
     with tab_institutions:
         inst = _institution_rollup(filtered)
@@ -120,13 +121,13 @@ def render_new_intake_page(data: dict[str, object]) -> None:
                 inst.head(15),
                 label="institution_standard",
                 value="merchant_count",
-                title="Top institutions",
+                title="机构排名",
                 color=PALETTE["cyan"],
             ),
             key="chart_ni_top_institutions",
             height=470,
         )
-        st.dataframe(inst, use_container_width=True, hide_index=True)
+        st.dataframe(display_table(inst), use_container_width=True, hide_index=True)
 
     with tab_merchants:
         display_columns = [
@@ -139,8 +140,6 @@ def render_new_intake_page(data: dict[str, object]) -> None:
             "geo_city",
             "geo_suburb",
             "geo_postcode",
-            "geo_reporting_level_label",
-            "geo_reporting_name",
             "nz_geo_area",
             "nz_business_cluster",
             "mcc_major_industry",
@@ -149,67 +148,70 @@ def render_new_intake_page(data: dict[str, object]) -> None:
             "txn_count_30d",
             "txn_amount_30d",
         ]
-        st.dataframe(_select_columns(filtered, display_columns), use_container_width=True, hide_index=True)
+        st.dataframe(display_table(_select_columns(filtered, display_columns)), use_container_width=True, hide_index=True)
 
 
 def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
-    st.sidebar.subheader("New Intake Filters")
-    st.sidebar.caption("Default: latest 6 cohort months, excluding Zhenxing and ONLINE.")
+    st.sidebar.subheader("新进件筛选")
+    st.sidebar.caption("默认：最近 6 个进件月，排除振兴商户和线上商户。")
     filtered = df
 
     months = _month_options(df)
     if months:
         default_start, default_end = _default_month_range(months)
         start, end = st.sidebar.select_slider(
-            "Cohort month range",
+            "进件月份范围",
             options=months,
             value=(default_start, default_end),
             key="ni_month_range_recent6_v2",
-            help="Default range is the latest 6 available cohort months.",
+            help="默认使用数据中最新的 6 个进件月。",
         )
         filtered = _filter_month_range(filtered, start, end)
 
-    selected_country = multiselect_filter("Country", filtered, "geo_country", key="ni_country")
+    selected_country = mapped_multiselect_filter("国家", filtered, "geo_country", key="ni_country", value_map=COUNTRY_LABELS)
     if selected_country:
         filtered = filtered[filtered["geo_country"].astype(str).isin(selected_country)]
 
     filtered = _apply_geo_filters(filtered)
 
     zhenxing = st.sidebar.selectbox(
-        "Zhenxing",
-        ("All", "Only Zhenxing", "Exclude Zhenxing"),
+        "振兴商户",
+        ("全部", "只看振兴", "排除振兴"),
         index=2,
         key="ni_zhenxing_default_exclude",
-        help="Default excludes Zhenxing merchants from the New Intake working view.",
+        help="默认从新进件工作视图中排除振兴商户。",
     )
     if "is_zhenxing" in filtered.columns:
         filtered = _apply_zhenxing_scope(filtered, zhenxing)
 
     online_scope = st.sidebar.selectbox(
-        "Online scope",
+        "线上渠道",
         (ONLINE_SCOPE_EXCLUDE, ONLINE_SCOPE_ALL, ONLINE_SCOPE_ONLY),
         index=0,
         key="ni_online_scope_default_exclude",
-        help="Default excludes channel_type=ONLINE. Switch to All channels to include ONLINE.",
+        help="默认排除线上商户。切换到全部渠道可纳入线上商户。",
     )
     filtered = _apply_online_scope(filtered, online_scope)
 
     for label, column, key in (
-        ("Institution", "institution_standard", "ni_institution"),
-        ("Channel", "channel_type", "ni_channel_scope"),
-        ("Industry", "mcc_major_industry", "ni_industry"),
+        ("机构", "institution_standard", "ni_institution"),
+        ("渠道", "channel_type", "ni_channel_scope"),
+        ("行业", "mcc_major_industry", "ni_industry"),
     ):
-        selected = multiselect_filter(label, filtered, column, key=key)
+        if column == "channel_type":
+            selected = mapped_multiselect_filter(label, filtered, column, key=key, value_map=CHANNEL_LABELS)
+        else:
+            selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
             filtered = filtered[filtered[column].astype(str).isin(selected)]
 
-    status = st.sidebar.selectbox("Activation status", ("All", "Active", "Inactive"), key="ni_active")
-    if status == "Active":
+    status = st.sidebar.selectbox("接入后30天激活状态", ("全部", "已激活", "未激活"), key="ni_active")
+    if status == "已激活":
         filtered = filtered[filtered["active_30d_flag"].astype(str) == "1"]
-    elif status == "Inactive":
+    elif status == "未激活":
         filtered = filtered[filtered["active_30d_flag"].astype(str) == "0"]
 
-    query = st.sidebar.text_input("Merchant / institution keyword", key="ni_query")
+    query = st.sidebar.text_input("商户/机构关键词", key="ni_query")
     return apply_text_filter(
         filtered,
         [
@@ -231,7 +233,7 @@ def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
     if scope == "NZ":
         return _apply_nz_geo_filters(df)
     if scope == "MIXED":
-        selected_city = multiselect_filter("City", df, "geo_city", key="ni_geo_city")
+        selected_city = multiselect_filter("城市", df, "geo_city", key="ni_geo_city")
         filtered = df[df["geo_city"].astype(str).isin(selected_city)] if selected_city else df
         if selected_city and country_scope(filtered) == "NZ":
             return _apply_nz_geo_filters(filtered, selected_city=selected_city)
@@ -244,31 +246,31 @@ def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
 def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None = None) -> pd.DataFrame:
     filtered = df
     if selected_city is None:
-        selected_city = multiselect_filter("City", filtered, "geo_city", key="ni_geo_city")
+        selected_city = multiselect_filter("城市", filtered, "geo_city", key="ni_geo_city")
         if selected_city:
             filtered = filtered[filtered["geo_city"].astype(str).isin(selected_city)]
 
     area_key = "ni_nz_geo_area"
     if not selected_city:
         disabled_multiselect_filter(
-            "NZ geo area",
+            "NZ 地理片区",
             key=area_key,
-            help_text="Select City first to enable NZ geo area.",
+            help_text="请先选择城市，之后才能选择 NZ 地理片区。",
         )
     elif not options(filtered, "nz_geo_area"):
         disabled_multiselect_filter(
-            "NZ geo area",
+            "NZ 地理片区",
             key=area_key,
-            help_text="Selected City has no reviewed NZ geo area.",
+            help_text="所选城市暂无已审核的 NZ 地理片区。",
         )
     else:
-        selected_area = multiselect_filter("NZ geo area", filtered, "nz_geo_area", key=area_key)
+        selected_area = multiselect_filter("NZ 地理片区", filtered, "nz_geo_area", key=area_key)
         if selected_area:
             filtered = filtered[filtered["nz_geo_area"].astype(str).isin(selected_area)]
 
     for label, column, key in (
-        ("NZ cluster", "nz_business_cluster", "ni_nz_cluster"),
-        ("Suburb", "geo_suburb", "ni_geo_suburb"),
+        ("NZ 商圈集群", "nz_business_cluster", "ni_nz_cluster"),
+        ("街区", "geo_suburb", "ni_geo_suburb"),
     ):
         selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
@@ -368,9 +370,9 @@ def _apply_zhenxing_scope(df: pd.DataFrame, scope: str) -> pd.DataFrame:
     if "is_zhenxing" not in df.columns:
         return df
     values = df["is_zhenxing"].fillna("").astype(str)
-    if scope == "Only Zhenxing":
+    if scope == "只看振兴":
         return df[values == "1"]
-    if scope == "Exclude Zhenxing":
+    if scope == "排除振兴":
         return df[values == "0"]
     return df
 
@@ -393,6 +395,7 @@ def _country_monthly(df: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     pivot.columns = [str(col) for col in pivot.columns]
+    pivot = pivot.rename(columns={key: value for key, value in COUNTRY_LABELS.items() if key in pivot.columns})
     return _sort_by_month(pivot)
 
 
@@ -415,10 +418,10 @@ def _institution_rollup(df: pd.DataFrame) -> pd.DataFrame:
     return grouped.reset_index().sort_values("merchant_count", ascending=False)
 
 
-def _distribution(df: pd.DataFrame, column: str) -> pd.DataFrame:
+def _distribution(df: pd.DataFrame, column: str, *, value_map: dict[str, str] | None = None) -> pd.DataFrame:
     if column not in df.columns:
         return pd.DataFrame(columns=["label", "count"])
-    return (
+    out = (
         df[column]
         .fillna("UNKNOWN")
         .astype(str)
@@ -426,6 +429,11 @@ def _distribution(df: pd.DataFrame, column: str) -> pd.DataFrame:
         .rename_axis("label")
         .reset_index(name="count")
     )
+    if value_map:
+        out["label"] = out["label"].map(lambda value: label_value(value, value_map))
+    else:
+        out["label"] = out["label"].replace({"UNKNOWN": "未分类"})
+    return out
 
 
 def _select_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:

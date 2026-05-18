@@ -5,6 +5,8 @@ from typing import Iterable
 import pandas as pd
 import streamlit as st
 
+from ui_labels import label_value
+
 
 def options(df: pd.DataFrame, column: str) -> list[str]:
     if column not in df.columns:
@@ -29,6 +31,25 @@ def multiselect_filter(
         return []
     _prune_multiselect_state(key, values)
     return st.sidebar.multiselect(label, values, key=key, help=help_text)
+
+
+def mapped_multiselect_filter(
+    label: str,
+    df: pd.DataFrame,
+    column: str,
+    *,
+    key: str,
+    value_map: dict[str, str],
+    help_text: str | None = None,
+) -> list[str]:
+    values = options(df, column)
+    if not values:
+        return []
+    labels = [label_value(value, value_map) for value in values]
+    _prune_multiselect_state(key, labels)
+    selected_labels = st.sidebar.multiselect(label, labels, key=key, help=help_text)
+    selected = set(selected_labels)
+    return [value for value in values if label_value(value, value_map) in selected]
 
 
 def disabled_multiselect_filter(label: str, *, key: str, help_text: str | None = None) -> list[str]:

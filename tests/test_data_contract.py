@@ -21,6 +21,7 @@ from exports import (
 from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
 from pages_or_modules.new_intake import (
+    ONLINE_SCOPE_EXCLUDE,
     _apply_online_scope,
     _apply_zhenxing_scope,
     _default_month_range,
@@ -197,7 +198,7 @@ def test_new_intake_default_scope_excludes_online_and_zhenxing() -> None:
         }
     )
 
-    scoped = _apply_zhenxing_scope(_apply_online_scope(rows, "Exclude ONLINE"), "Exclude Zhenxing")
+    scoped = _apply_zhenxing_scope(_apply_online_scope(rows, ONLINE_SCOPE_EXCLUDE), "排除振兴")
 
     assert scoped["merchant_id"].tolist() == ["offline"]
 

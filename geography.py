@@ -10,17 +10,17 @@ DEFAULT_COUNTRY_COLUMNS = ("analysis_country", "scope_country", "country_group",
 UNKNOWN_VALUES = {"", "nan", "none", "null", "unknown", "未分类", "未识别城市/地址缺失"}
 
 LEVEL_LABELS = {
-    "nz_geo_area": "NZ geo area",
-    "nz_cluster": "NZ cluster",
-    "au_service_area": "AU service area",
-    "au_city": "AU city",
-    "au_state": "AU state",
-    "au_suburb": "AU suburb",
-    "city": "City",
-    "suburb": "Suburb",
-    "postcode": "Postcode",
-    "country": "Country",
-    "unmatched": "Unmatched",
+    "nz_geo_area": "NZ 地理片区",
+    "nz_cluster": "NZ 商圈集群",
+    "au_service_area": "AU 服务区域",
+    "au_city": "AU 城市",
+    "au_state": "AU 州/省",
+    "au_suburb": "AU 街区",
+    "city": "城市",
+    "suburb": "街区",
+    "postcode": "邮编",
+    "country": "国家",
+    "unmatched": "未匹配",
 }
 
 
@@ -133,19 +133,19 @@ def country_scope(df: pd.DataFrame, country_column: str = "geo_country") -> str:
 def sidebar_geo_filter_specs(scope: str) -> list[GeoFilterSpec]:
     if scope == "NZ":
         return [
-            GeoFilterSpec("City", "geo_city", "geo_city"),
-            GeoFilterSpec("NZ geo area", "nz_geo_area", "nz_geo_area"),
-            GeoFilterSpec("NZ cluster", "nz_business_cluster", "nz_cluster"),
-            GeoFilterSpec("Suburb", "geo_suburb", "geo_suburb"),
+            GeoFilterSpec("城市", "geo_city", "geo_city"),
+            GeoFilterSpec("NZ 地理片区", "nz_geo_area", "nz_geo_area"),
+            GeoFilterSpec("NZ 商圈集群", "nz_business_cluster", "nz_cluster"),
+            GeoFilterSpec("街区", "geo_suburb", "geo_suburb"),
         ]
     if scope == "AU":
         return [
-            GeoFilterSpec("State", "geo_state", "geo_state"),
-            GeoFilterSpec("City", "geo_city", "geo_city"),
-            GeoFilterSpec("Suburb", "geo_suburb", "geo_suburb"),
-            GeoFilterSpec("Postcode", "geo_postcode", "geo_postcode"),
+            GeoFilterSpec("州/省", "geo_state", "geo_state"),
+            GeoFilterSpec("城市", "geo_city", "geo_city"),
+            GeoFilterSpec("街区", "geo_suburb", "geo_suburb"),
+            GeoFilterSpec("邮编", "geo_postcode", "geo_postcode"),
         ]
-    return [GeoFilterSpec("City", "geo_city", "geo_city")]
+    return [GeoFilterSpec("城市", "geo_city", "geo_city")]
 
 
 def geo_reporting_bridge_contract() -> pd.DataFrame:
