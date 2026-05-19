@@ -518,6 +518,24 @@ def test_silent_rows_preserve_ids_and_copy_stores_address_for_geo_matching() -> 
     assert staged.loc[0, "staging_geo_area"] == "Central Auckland"
 
 
+def test_silent_rows_strip_bom_from_snapshot_column() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "\ufeffsnapshot_ds": "20260501",
+                "country_group": "AU",
+                "merchant_country_code": "036",
+                "merchant_id": "823448011",
+                "stores_address": "VIC - Syndal - Unit902/108 Queens Rd",
+            }
+        ]
+    )
+
+    rows = _silent_rows(raw)
+
+    assert rows.loc[0, "snapshot_ds"] == "20260501"
+
+
 def test_silent_page_helpers_sort_filter_and_keep_country_aware_geo_specs() -> None:
     rows = pd.DataFrame(
         [
