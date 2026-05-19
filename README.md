@@ -1,6 +1,6 @@
 # ANZ BI Streamlit Portal
 
-Streamlit BI portal for ANZ WeChat Pay New Intake, Activation Low-Activity, and Silent Merchants analysis.
+Streamlit BI portal for ANZ WeChat Pay New Intake, Activation Low-Activity, Rate Coupon Activity, and Silent Merchants analysis.
 
 This repository is the clean Streamlit code home for the ANZ BI portal:
 
@@ -22,6 +22,7 @@ projects/anz-bi-platform/
   processed/
     new_intake/
     activation_low_activity/
+    rate_coupon_activity/
     silent_merchants/
     shared_dimensions/
 ```
@@ -194,6 +195,7 @@ projects/anz-bi-platform/
   processed/
     new_intake/
     activation_low_activity/
+    rate_coupon_activity/
     silent_merchants/
     shared_dimensions/
 ```
@@ -213,6 +215,20 @@ python scripts\build_private_data_project.py `
   --silent-detail "D:\Tencent\Data analysis\2026.5.18_ANZ_silent_merchants_activation\data\raw\first_600.xlsx" `
   --silent-aggregate "D:\Tencent\Data analysis\2026.5.18_ANZ_silent_merchants_activation\data\raw\00a.xlsx"
 ```
+
+For a page-scoped Rate Coupon Activity refresh only:
+
+```powershell
+python scripts\materialize_rate_coupon_activity.py `
+  --output-root "D:\Tencent\Data analysis\anzdata-worktree\projects\anz-bi-platform" `
+  --source-monthly "D:\Tencent\Data analysis\2026.5.15_NZ_rate_coupon_stock_monthly\data\raw\rate_coupon_stock_from_start_to_202604_monthly.csv" `
+  --version "2026.05.19-rate-coupon-v1"
+```
+
+The script writes only `processed/rate_coupon_activity/` and the
+`manifest.page_datasets.rate_coupon_activity` entry. It keeps internal file
+contracts, page ids, and metric keys in English ASCII; Chinese campaign names
+are preserved only as display labels.
 
 ## Country-Aware Geography Contract
 

@@ -253,6 +253,7 @@ def test_manifest_schema_guard_accepts_expected_versions() -> None:
                 "page_datasets": {
                     "new_intake": {"schema_version": "1.0"},
                     "activation_low_activity": {"schema_version": "1.0"},
+                    "rate_coupon_activity": {"schema_version": "1.0"},
                     "silent_merchants": {"schema_version": "1.0"},
                 },
             }
@@ -269,6 +270,7 @@ def test_manifest_schema_guard_rejects_stale_versions() -> None:
                     "page_datasets": {
                         "new_intake": {"schema_version": "0.9"},
                         "activation_low_activity": {"schema_version": "1.0"},
+                        "rate_coupon_activity": {"schema_version": "1.0"},
                         "silent_merchants": {"schema_version": "1.0"},
                     },
                 }

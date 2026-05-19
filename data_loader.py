@@ -25,6 +25,7 @@ DEFAULT_LOCAL_GEO_STAGING_ROOT = Path(
 REMOTE_GEO_ROOT = "processed"
 CSV_DTYPES = {
     "intake_month": "string",
+    "month_label": "string",
     "snapshot_ds": "string",
     "merchant_id": "string",
     "institution_id": "string",
@@ -32,10 +33,14 @@ CSV_DTYPES = {
     "mcc_code": "string",
     "mcc": "string",
     "ka_mid": "string",
+    "stock_id": "string",
+    "stock_key": "string",
+    "country_group": "string",
 }
 EXPECTED_SCHEMA = {
     "new_intake": "1.0",
     "activation_low_activity": "1.0",
+    "rate_coupon_activity": "1.0",
     "silent_merchants": "1.0",
 }
 EXPECTED_GEO_CONTRACT = "country-aware-1.0"
@@ -138,6 +143,11 @@ def _load_project_data_cached(source: DataSource, data_version: str) -> dict[str
             "export_rows": _load_frame(source, "processed/silent_merchants/silent_merchants_provider_export.csv"),
             "provider_export_rows": _load_frame_optional(source, "processed/silent_merchants/silent_merchants_provider_export.csv"),
             "internal_export_rows": _load_frame_optional(source, "processed/silent_merchants/silent_merchants_internal_record_export.csv"),
+        },
+        "rate_coupon_activity": {
+            "monthly": _load_frame(source, "processed/rate_coupon_activity/rate_coupon_monthly.csv"),
+            "stock_metadata": _load_frame(source, "processed/rate_coupon_activity/rate_coupon_stock_metadata.csv"),
+            "summary": _load_json(source, "processed/rate_coupon_activity/rate_coupon_summary.json"),
         },
         "shared_dimensions": {
             "geo_reporting_bridge": _load_frame_optional(source, "processed/shared_dimensions/geo_reporting_bridge.csv"),
