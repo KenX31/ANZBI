@@ -98,79 +98,126 @@ def resolve_data_source() -> DataSource:
     )
 
 
-def load_project_data() -> dict[str, Any]:
+def load_project_manifest() -> dict[str, Any]:
+    source = resolve_data_source()
+    manifest = _load_json(source, "manifest.json")
+    return {"manifest": manifest}
+
+
+@st.cache_resource(show_spinner=False, max_entries=2)
+def _load_page_data_cached(source: DataSource, page: str, data_version: str) -> dict[str, Any]:
+    if page == "new_intake":
+        return _load_new_intake_data(source)
+    if page == "activation_low_activity":
+        return _load_activation_low_activity_data(source)
+    if page == "silent_merchants":
+        return _load_silent_merchants_data(source)
+    if page == "rate_coupon_activity":
+        return _load_rate_coupon_activity_data(source)
+    raise DataLoadError(f"Unsupported page key: {page}")
+
+
+def load_page_data(page: str) -> dict[str, Any]:
     source = resolve_data_source()
     manifest = _load_json(source, "manifest.json")
     ka_manifest = _load_project_json_optional(source, source.github_ka_project, "manifest.json")
-    data_version = f"{manifest.get('version') or ''}|ka:{ka_manifest.get('version') or ''}"
-    project = _load_project_data_cached(source, data_version)
+    data_version = _page_data_version(manifest, ka_manifest, page)
+    return _load_page_data_cached(source, page, data_version)
+
+
+def load_project_data() -> dict[str, Any]:
+    """Load the full project for compatibility; the app uses page-level loading."""
+
+    source = resolve_data_source()
+    manifest = _load_json(source, "manifest.json")
+    project = {
+        "new_intake": _load_new_intake_data(source),
+        "activation_low_activity": _load_activation_low_activity_data(source),
+        "silent_merchants": _load_silent_merchants_data(source),
+        "rate_coupon_activity": _load_rate_coupon_activity_data(source),
+        "shared_dimensions": {
+            "geo_reporting_bridge": _load_frame_optional(source, "processed/shared_dimensions/geo_reporting_bridge.csv"),
+            "ka_merchants": _load_ka_dimension(source),
+        },
+    }
     return {"manifest": manifest, **project}
 
 
-@st.cache_data(show_spinner=False)
-def _load_project_data_cached(source: DataSource, data_version: str) -> dict[str, Any]:
+def _page_data_version(manifest: dict[str, Any], ka_manifest: dict[str, Any], page: str) -> str:
+    page_datasets = manifest.get("page_datasets") if isinstance(manifest.get("page_datasets"), dict) else {}
+    page_info = page_datasets.get(page) if isinstance(page_datasets, dict) else {}
+    page_info = page_info if isinstance(page_info, dict) else {}
+    ka_version = ka_manifest.get("version") if page in {"new_intake", "activation_low_activity", "silent_merchants"} else ""
+    return "|".join(
+        str(part or "")
+        for part in (
+            manifest.get("version"),
+            page,
+            page_info.get("schema_version"),
+            page_info.get("source_period"),
+            page_info.get("row_count"),
+            ka_version,
+        )
+    )
+
+
+def _load_new_intake_data(source: DataSource) -> dict[str, Any]:
     ka_dimension = _load_ka_dimension(source)
     return {
-        "new_intake": {
-            "rows": _append_ka_segment(
-                _load_page_rows(source, "processed/new_intake/new_intake_rows.csv"),
-                ka_dimension,
-            ),
-            "summary": _load_json(source, "processed/new_intake/new_intake_summary.json"),
-            "institution_rollup": _load_frame(source, "processed/new_intake/new_intake_institution_rollup.csv"),
-            "export_rows": _load_frame(source, "processed/new_intake/new_intake_export.csv"),
-            "provider_export_rows": _load_frame_optional(source, "processed/new_intake/new_intake_provider_export.csv"),
-            "internal_export_rows": _load_frame_optional(source, "processed/new_intake/new_intake_internal_record_export.csv"),
-        },
-        "activation_low_activity": {
-            "rows": _append_ka_segment(
-                _load_page_rows(source, "processed/activation_low_activity/activation_candidates.csv"),
-                ka_dimension,
-            ),
-            "summary": _load_json(source, "processed/activation_low_activity/low_activity_bi_summary.json"),
-            "area_rollup": _load_frame(source, "processed/activation_low_activity/area_low_activity_rollup.csv"),
-            "export_rows": _load_frame(source, "processed/activation_low_activity/activation_export.csv"),
-            "provider_export_rows": _load_frame_optional(source, "processed/activation_low_activity/activation_provider_export.csv"),
-            "internal_export_rows": _load_frame_optional(source, "processed/activation_low_activity/activation_internal_record_export.csv"),
-        },
-        "silent_merchants": {
-            "rows": _append_ka_segment(
-                _load_page_rows(source, "processed/silent_merchants/silent_merchants_rows.csv"),
-                ka_dimension,
-            ),
-            "summary": _load_json(source, "processed/silent_merchants/silent_merchants_summary.json"),
-            "aggregate": _load_frame(source, "processed/silent_merchants/silent_merchants_aggregate.csv"),
-            "export_rows": _load_frame(source, "processed/silent_merchants/silent_merchants_provider_export.csv"),
-            "provider_export_rows": _load_frame_optional(source, "processed/silent_merchants/silent_merchants_provider_export.csv"),
-            "internal_export_rows": _load_frame_optional(source, "processed/silent_merchants/silent_merchants_internal_record_export.csv"),
-        },
-        "rate_coupon_activity": {
-            "monthly": _load_frame(source, "processed/rate_coupon_activity/rate_coupon_monthly.csv"),
-            "stock_metadata": _load_frame(source, "processed/rate_coupon_activity/rate_coupon_stock_metadata.csv"),
-            "summary": _load_json(source, "processed/rate_coupon_activity/rate_coupon_summary.json"),
-        },
-        "shared_dimensions": {
-            "geo_reporting_bridge": _load_frame_optional(source, "processed/shared_dimensions/geo_reporting_bridge.csv"),
-            "ka_merchants": ka_dimension,
-        },
+        "rows": _append_ka_segment(
+            _load_page_rows(source, "processed/new_intake/new_intake_rows.csv"),
+            ka_dimension,
+        ),
+        "summary": _load_json(source, "processed/new_intake/new_intake_summary.json"),
+        "institution_rollup": _load_frame(source, "processed/new_intake/new_intake_institution_rollup.csv"),
+    }
+
+
+def _load_activation_low_activity_data(source: DataSource) -> dict[str, Any]:
+    ka_dimension = _load_ka_dimension(source)
+    return {
+        "rows": _append_ka_segment(
+            _load_page_rows(source, "processed/activation_low_activity/activation_candidates.csv"),
+            ka_dimension,
+        ),
+        "summary": _load_json(source, "processed/activation_low_activity/low_activity_bi_summary.json"),
+        "area_rollup": _load_frame(source, "processed/activation_low_activity/area_low_activity_rollup.csv"),
+    }
+
+
+def _load_silent_merchants_data(source: DataSource) -> dict[str, Any]:
+    ka_dimension = _load_ka_dimension(source)
+    return {
+        "rows": _append_ka_segment(
+            _load_page_rows(source, "processed/silent_merchants/silent_merchants_rows.csv"),
+            ka_dimension,
+        ),
+        "summary": _load_json(source, "processed/silent_merchants/silent_merchants_summary.json"),
+        "aggregate": _load_frame(source, "processed/silent_merchants/silent_merchants_aggregate.csv"),
+    }
+
+
+def _load_rate_coupon_activity_data(source: DataSource) -> dict[str, Any]:
+    return {
+        "monthly": _load_frame(source, "processed/rate_coupon_activity/rate_coupon_monthly.csv"),
+        "stock_metadata": _load_frame(source, "processed/rate_coupon_activity/rate_coupon_stock_metadata.csv"),
+        "summary": _load_json(source, "processed/rate_coupon_activity/rate_coupon_summary.json"),
     }
 
 
 def validate_project(project: dict[str, Any]) -> None:
+    validate_project_metadata(project)
+
+    for page, expected in EXPECTED_SCHEMA.items():
+        validate_page_dataset(project, page, expected_schema=expected)
+
+
+def validate_project_metadata(project: dict[str, Any]) -> None:
     manifest = project.get("manifest") or {}
     if manifest.get("project_id") != PROJECT_ID:
         raise DataLoadError(
             f"Loaded data project is {manifest.get('project_id')!r}; expected {PROJECT_ID!r}."
         )
-
-    page_datasets = manifest.get("page_datasets") or {}
-    for page, expected in EXPECTED_SCHEMA.items():
-        actual = str((page_datasets.get(page) or {}).get("schema_version") or "")
-        if actual != expected:
-            raise DataLoadError(
-                f"{page} schema version is {actual or 'missing'}; expected {expected}. "
-                "Please refresh the private data package before rendering this app."
-            )
 
     shared_dimensions = manifest.get("shared_dimensions") or {}
     geo_contract = (shared_dimensions.get("geo_reporting_bridge") or {}).get("schema_version")
@@ -178,6 +225,27 @@ def validate_project(project: dict[str, Any]) -> None:
         raise DataLoadError(
             f"geo_reporting_bridge schema version is {geo_contract}; expected {EXPECTED_GEO_CONTRACT}. "
             "Please refresh the private data package before rendering this app."
+        )
+
+
+def validate_page_dataset(
+    project: dict[str, Any],
+    page: str,
+    *,
+    expected_schema: str | None = None,
+) -> None:
+    manifest = project.get("manifest") or {}
+    page_datasets = manifest.get("page_datasets") or {}
+    expected = expected_schema or EXPECTED_SCHEMA.get(page)
+    if expected is None:
+        raise DataLoadError(
+            f"Unsupported page key: {page}"
+        )
+    actual = str((page_datasets.get(page) or {}).get("schema_version") or "")
+    if actual != expected:
+        raise DataLoadError(
+            f"{page} schema version is {actual or 'missing'}; expected {expected}. "
+            "Please refresh the private data package before rendering this page."
         )
 
 

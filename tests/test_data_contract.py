@@ -26,7 +26,16 @@ from auth import (
 )
 from charts import combo_line_bar_option, donut_option, horizontal_bar_option
 from charts import combo_bar_count_line_option
-from data_loader import DataLoadError, _append_ka_segment, _normalize_amount_units, _read_csv_text, validate_project
+import data_loader
+from data_loader import (
+    DataLoadError,
+    _append_ka_segment,
+    _normalize_amount_units,
+    _read_csv_text,
+    validate_page_dataset,
+    validate_project,
+    validate_project_metadata,
+)
 from exports import (
     activation_internal_export,
     activation_provider_export,
@@ -380,6 +389,61 @@ def test_manifest_schema_guard_rejects_stale_versions() -> None:
         assert "new_intake schema version" in str(exc)
     else:
         raise AssertionError("validate_project should reject stale schema versions")
+
+
+def test_page_scoped_validation_allows_unselected_page_to_be_missing() -> None:
+    project = {
+        "manifest": {
+            "project_id": "anz-bi-platform",
+            "page_datasets": {
+                "new_intake": {"schema_version": "1.0"},
+                "activation_low_activity": {"schema_version": "1.0"},
+                "silent_merchants": {"schema_version": "1.0"},
+            },
+        }
+    }
+
+    validate_project_metadata(project)
+    validate_page_dataset(project, "silent_merchants")
+
+    try:
+        validate_page_dataset(project, "rate_coupon_activity")
+    except DataLoadError as exc:
+        assert "rate_coupon_activity schema version" in str(exc)
+    else:
+        raise AssertionError("Selected pages should still require their own schema version")
+
+
+def test_page_loader_skips_prebuilt_export_copies(monkeypatch) -> None:
+    calls: list[str] = []
+    source = data_loader.DataSource(backend="local", local_root=Path("unused"))
+
+    def fake_load_page_rows(_source: data_loader.DataSource, path: str) -> pd.DataFrame:
+        calls.append(path)
+        return pd.DataFrame([{"merchant_id": "100"}])
+
+    def fake_load_json(_source: data_loader.DataSource, path: str) -> dict[str, object]:
+        calls.append(path)
+        return {}
+
+    def fake_load_frame(_source: data_loader.DataSource, path: str) -> pd.DataFrame:
+        calls.append(path)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(data_loader, "_load_ka_dimension", lambda _source: pd.DataFrame())
+    monkeypatch.setattr(data_loader, "_load_page_rows", fake_load_page_rows)
+    monkeypatch.setattr(data_loader, "_load_json", fake_load_json)
+    monkeypatch.setattr(data_loader, "_load_frame", fake_load_frame)
+    monkeypatch.setattr(
+        data_loader,
+        "_load_frame_optional",
+        lambda _source, path: (_ for _ in ()).throw(AssertionError(f"Unexpected optional load: {path}")),
+    )
+
+    page = data_loader._load_new_intake_data(source)
+
+    assert page["rows"]["merchant_id"].tolist() == ["100"]
+    assert not any("export" in path for path in calls)
 
 
 def test_new_intake_source_period_uses_month_distribution() -> None:

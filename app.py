@@ -3,7 +3,13 @@ from __future__ import annotations
 import streamlit as st
 
 from auth import AuthConfigError, require_login
-from data_loader import DataLoadError, load_project_data, validate_project
+from data_loader import (
+    DataLoadError,
+    load_page_data,
+    load_project_manifest,
+    validate_page_dataset,
+    validate_project_metadata,
+)
 from pages_or_modules.activation_low_activity import render_activation_page
 from pages_or_modules.new_intake import render_new_intake_page
 from pages_or_modules.rate_coupon_activity import render_rate_coupon_activity_page
@@ -31,8 +37,8 @@ def main() -> None:
         st.stop()
 
     try:
-        project = load_project_data()
-        validate_project(project)
+        project = load_project_manifest()
+        validate_project_metadata(project)
     except DataLoadError as exc:
         st.error(str(exc))
         st.stop()
@@ -49,14 +55,21 @@ def main() -> None:
         f"数据版本 {manifest.get('version', '-')}；生成时间 {manifest.get('generated_at', '-')}"
     )
 
+    try:
+        validate_page_dataset(project, str(page_key))
+        page_data = load_page_data(str(page_key))
+    except DataLoadError as exc:
+        st.error(str(exc))
+        st.stop()
+
     if page_key == "new_intake":
-        render_new_intake_page(project["new_intake"])
+        render_new_intake_page(page_data)
     elif page_key == "activation_low_activity":
-        render_activation_page(project["activation_low_activity"])
+        render_activation_page(page_data)
     elif page_key == "rate_coupon_activity":
-        render_rate_coupon_activity_page(project["rate_coupon_activity"])
+        render_rate_coupon_activity_page(page_data)
     elif page_key == "silent_merchants":
-        render_silent_merchants_page(project["silent_merchants"])
+        render_silent_merchants_page(page_data)
     else:
         st.error(f"Unsupported page key: {page_key}")
 
