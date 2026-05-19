@@ -38,7 +38,7 @@ PAGE_LABELS = {
     "new_intake": "新进件",
     "activation_low_activity": "活跃监测",
     "rate_coupon_activity": "重点汇率活动",
-    "silent_merchants": "Silent Merchants",
+    "silent_merchants": "沉默商户",
 }
 
 COLUMN_LABELS = {

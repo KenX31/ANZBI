@@ -526,7 +526,7 @@ def test_activation_provider_export_keeps_mixed_country_specific_columns() -> No
     assert provider.loc[1, "州/省"] == "NSW"
 
 
-def test_silent_provider_export_excludes_internal_ids_and_uses_english_headers() -> None:
+def test_silent_provider_export_excludes_internal_ids_and_uses_chinese_headers() -> None:
     rows = pd.DataFrame(
         [
             {
@@ -556,21 +556,24 @@ def test_silent_provider_export_excludes_internal_ids_and_uses_english_headers()
     assert "merchant_id" not in provider.columns
     assert "institution_id" not in provider.columns
     assert provider.columns.tolist() == [
-        "Merchant Name",
-        "Country",
-        "State",
-        "City",
-        "Suburb",
-        "Postcode",
-        "Geo Reporting Name",
-        "Silence Tier",
-        "Access Age Band",
-        "Access Time",
-        "Business Type",
-        "Address",
-        "MCC Code",
+        "商家名",
+        "国家",
+        "州/省",
+        "所在城市",
+        "街区",
+        "邮编",
+        "地理展示名称",
+        "沉默分层",
+        "接入时长",
+        "接入时间",
+        "业务类型",
+        "详细地址",
+        "MCC代码",
     ]
-    assert provider.loc[0, "Silence Tier"] == "New unactivated after 180 days"
+    assert provider.loc[0, "国家"] == "澳大利亚"
+    assert provider.loc[0, "沉默分层"] == "新接入180天未激活"
+    assert provider.loc[0, "接入时长"] == "接入180-359天"
+    assert provider.loc[0, "业务类型"] == "线下"
     assert "merchant_id" in internal.columns
     assert "institution_id" in internal.columns
     assert internal.loc[0, "merchant_id"] == "823448011"

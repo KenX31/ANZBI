@@ -19,6 +19,8 @@ from charts import (
 )
 from exports import (
     SILENT_ACCESS_AGE_LABELS,
+    SILENT_BUSINESS_TYPE_LABELS,
+    SILENT_COUNTRY_LABELS,
     SILENT_TIER_LABELS,
     csv_bytes,
     silent_merchants_internal_export,
@@ -29,14 +31,10 @@ from geography import GeoFilterSpec, country_scope, with_reporting_geography
 from metrics import format_int, format_pct, rate
 
 
-COUNTRY_LABELS_EN = {
-    "AU": "Australia",
-    "NZ": "New Zealand",
-}
 ADDRESS_SCOPE_LABELS = {
-    "All": "all",
-    "Has address": "has_address",
-    "Missing address": "missing_address",
+    "全部": "all",
+    "有地址": "has_address",
+    "缺少地址": "missing_address",
 }
 SILENCE_TIER_ORDER = ["new_unactivated_180d", "initial_silent", "deep_silent"]
 ACCESS_AGE_ORDER = ["access_180_359d", "access_gte_360d"]
@@ -52,14 +50,13 @@ def render_silent_merchants_page(data: dict[str, object]) -> None:
     rows = _prepare_rows(data["rows"].copy())  # type: ignore[index, union-attr]
     summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
     if rows.empty:
-        st.warning("No silent merchant data is available.")
+        st.warning("没有可用的沉默商户数据。")
         return
 
-    st.header("Silent Merchants")
+    st.header("沉默商户")
     st.caption(
-        "Activation opportunity pool as of snapshot 2026-05-01. The v1 scope keeps AU/NZ OFFLINE or BOTH "
-        "merchants, excludes Zhenxing institutions, requires at least 180 days since access, and keeps only "
-        "merchants with zero transactions in the latest 180-day window."
+        "当前快照日期为 2026-05-01。v1 口径保留澳大利亚/新西兰线下或线上+线下商户，"
+        "排除振兴机构，要求商户接入已满 180 天，并且最近 180 天交易笔数为 0。"
     )
     _sample_notice(summary, rows)
 
@@ -71,14 +68,14 @@ def render_silent_merchants_page(data: dict[str, object]) -> None:
     address_count = int(_has_address_series(filtered).sum()) if total else 0
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Candidate merchants", format_int(total))
-    c2.metric("New unactivated 180d", format_int(new_unactivated))
-    c3.metric("Initial silent", format_int(initial_silent))
-    c4.metric("Deep silent", format_int(deep_silent))
-    c5.metric("Address coverage", format_pct(rate(address_count, total)))
+    c1.metric("候选商户", format_int(total))
+    c2.metric("新接入180天未激活", format_int(new_unactivated))
+    c3.metric("初始沉默", format_int(initial_silent))
+    c4.metric("深度沉默", format_int(deep_silent))
+    c5.metric("地址覆盖率", format_pct(rate(address_count, total)))
 
     if filtered.empty:
-        st.info("No merchants match the current filters.")
+        st.info("当前筛选下没有匹配商户。")
         return
 
     if can_export_data():
@@ -86,13 +83,13 @@ def render_silent_merchants_page(data: dict[str, object]) -> None:
         internal_export = silent_merchants_internal_export(filtered)
         d1, d2 = st.columns(2)
         d1.download_button(
-            "Export provider execution list",
+            "导出服务商执行清单",
             csv_bytes(provider_export),
             "silent_merchants_provider_execution_list.csv",
             "text/csv",
         )
         d2.download_button(
-            "Export internal record list",
+            "导出内部记录清单",
             csv_bytes(internal_export),
             "silent_merchants_internal_record_list.csv",
             "text/csv",
@@ -101,21 +98,21 @@ def render_silent_merchants_page(data: dict[str, object]) -> None:
         render_export_restricted_notice()
 
     tab_overview, tab_area, tab_institutions, tab_merchants = st.tabs(
-        ["Overview", "Area", "Institutions", "Merchant Details"]
+        ["总览", "区域", "机构", "商户明细"]
     )
     with tab_overview:
         c1, c2 = st.columns(2)
         with c1:
             tier = _distribution(filtered, "silence_tier", value_map=SILENT_TIER_LABELS, order=SILENCE_TIER_ORDER)
             render_echart(
-                donut_option(tier, label="label", value="count", title="Silence tier"),
+                donut_option(tier, label="label", value="count", title="沉默分层"),
                 key="chart_silent_tier",
                 height=330,
             )
         with c2:
-            country = _distribution(filtered, "geo_country", value_map=COUNTRY_LABELS_EN)
+            country = _distribution(filtered, "geo_country", value_map=SILENT_COUNTRY_LABELS)
             render_echart(
-                donut_option(country, label="label", value="count", title="Country distribution"),
+                donut_option(country, label="label", value="count", title="国家分布"),
                 key="chart_silent_country",
                 height=330,
             )
@@ -124,14 +121,14 @@ def render_silent_merchants_page(data: dict[str, object]) -> None:
         with c1:
             access = _distribution(filtered, "access_age_band", value_map=SILENT_ACCESS_AGE_LABELS, order=ACCESS_AGE_ORDER)
             render_echart(
-                simple_bar_option(access, x="label", y="count", title="Access age band", color=PALETTE["cyan"]),
+                simple_bar_option(access, x="label", y="count", title="接入时长分布", color=PALETTE["cyan"]),
                 key="chart_silent_access_age",
                 height=330,
             )
         with c2:
-            business = _distribution(filtered, "business_type")
+            business = _distribution(filtered, "business_type", value_map=SILENT_BUSINESS_TYPE_LABELS)
             render_echart(
-                simple_bar_option(business, x="label", y="count", title="Business type", color=PALETTE["green"]),
+                simple_bar_option(business, x="label", y="count", title="业务类型分布", color=PALETTE["green"]),
                 key="chart_silent_business_type",
                 height=330,
             )
@@ -139,14 +136,14 @@ def render_silent_merchants_page(data: dict[str, object]) -> None:
     with tab_area:
         area = _area_rollup(filtered)
         if area.empty:
-            empty_chart("No area data is available for the current filters.")
+            empty_chart("当前筛选下没有可用区域数据。")
         else:
             render_echart(
                 horizontal_bar_option(
                     area.head(20),
                     label="geo_reporting_name",
                     value="merchant_count",
-                    title="Top activation areas",
+                    title="沉默商户区域排名",
                     color=PALETTE["blue"],
                 ),
                 key="chart_silent_area_rank",
@@ -161,7 +158,7 @@ def render_silent_merchants_page(data: dict[str, object]) -> None:
                 institutions.head(20),
                 label="institution_name",
                 value="merchant_count",
-                title="Top institutions",
+                title="机构排名",
                 color=PALETTE["cyan"],
             ),
             key="chart_silent_institution_rank",
@@ -173,7 +170,7 @@ def render_silent_merchants_page(data: dict[str, object]) -> None:
                 tier_mix,
                 label="label",
                 value="merchant_count",
-                title="Institution concentration",
+                title="机构集中度",
             ),
             key="chart_silent_institution_treemap",
             height=360,
@@ -217,11 +214,11 @@ def _prepare_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
-    st.sidebar.subheader("Silent merchant filters")
+    st.sidebar.subheader("沉默商户筛选")
     filtered = df
 
     selected_country = mapped_multiselect_filter(
-        "Country", filtered, "geo_country", key="silent_country", value_map=COUNTRY_LABELS_EN
+        "国家", filtered, "geo_country", key="silent_country", value_map=SILENT_COUNTRY_LABELS
     )
     if selected_country:
         filtered = filtered[filtered["geo_country"].astype(str).isin(selected_country)]
@@ -229,34 +226,39 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     filtered = _apply_geo_filters(filtered)
 
     selected_tier = mapped_multiselect_filter(
-        "Silence tier", filtered, "silence_tier", key="silent_tier", value_map=SILENT_TIER_LABELS
+        "沉默分层", filtered, "silence_tier", key="silent_tier", value_map=SILENT_TIER_LABELS
     )
     if selected_tier:
         filtered = filtered[filtered["silence_tier"].astype(str).isin(selected_tier)]
 
     selected_age = mapped_multiselect_filter(
-        "Access age band", filtered, "access_age_band", key="silent_age", value_map=SILENT_ACCESS_AGE_LABELS
+        "接入时长", filtered, "access_age_band", key="silent_age", value_map=SILENT_ACCESS_AGE_LABELS
     )
     if selected_age:
         filtered = filtered[filtered["access_age_band"].astype(str).isin(selected_age)]
 
+    selected_business_type = mapped_multiselect_filter(
+        "业务类型", filtered, "business_type", key="silent_business_type", value_map=SILENT_BUSINESS_TYPE_LABELS
+    )
+    if selected_business_type:
+        filtered = filtered[filtered["business_type"].astype(str).isin(selected_business_type)]
+
     for label, column, key in (
-        ("Business type", "business_type", "silent_business_type"),
-        ("Institution group", "institution_group", "silent_institution_group"),
-        ("Institution", "institution_name", "silent_institution"),
-        ("MCC code", "mcc_code", "silent_mcc_code"),
+        ("机构分组", "institution_group", "silent_institution_group"),
+        ("机构", "institution_name", "silent_institution"),
+        ("MCC代码", "mcc_code", "silent_mcc_code"),
     ):
         selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
             filtered = filtered[filtered[column].astype(str).isin(selected)]
 
-    address_scope = st.sidebar.selectbox("Address availability", list(ADDRESS_SCOPE_LABELS), key="silent_address_scope")
+    address_scope = st.sidebar.selectbox("地址可用性", list(ADDRESS_SCOPE_LABELS), key="silent_address_scope")
     filtered = _filter_address_scope(filtered, ADDRESS_SCOPE_LABELS[address_scope])
 
     bounds = _access_date_bounds(filtered)
     if bounds:
         value = st.sidebar.date_input(
-            "Access date range",
+            "接入日期范围",
             value=(bounds.start, bounds.end),
             min_value=bounds.start,
             max_value=bounds.end,
@@ -265,7 +267,7 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
         if isinstance(value, tuple) and len(value) == 2:
             filtered = _filter_access_date_range(filtered, value[0], value[1])
 
-    query = st.sidebar.text_input("Merchant / institution / area / ID keyword", key="silent_query")
+    query = st.sidebar.text_input("商户/机构/区域/ID关键词", key="silent_query")
     return apply_text_filter(
         filtered,
         [
@@ -292,7 +294,7 @@ def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
     if scope == "NZ":
         return _apply_nz_geo_filters(df)
     if scope == "MIXED":
-        selected_city = multiselect_filter("City", df, "geo_city", key="silent_geo_city")
+        selected_city = multiselect_filter("城市", df, "geo_city", key="silent_geo_city")
         filtered = df[df["geo_city"].astype(str).isin(selected_city)] if selected_city else df
         if selected_city and country_scope(filtered) == "NZ":
             return _apply_nz_geo_filters(filtered, selected_city=selected_city)
@@ -305,31 +307,31 @@ def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
 def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None = None) -> pd.DataFrame:
     filtered = df
     if selected_city is None:
-        selected_city = multiselect_filter("City", filtered, "geo_city", key="silent_geo_city")
+        selected_city = multiselect_filter("城市", filtered, "geo_city", key="silent_geo_city")
         if selected_city:
             filtered = filtered[filtered["geo_city"].astype(str).isin(selected_city)]
 
     area_key = "silent_nz_geo_area"
     if not selected_city:
         disabled_multiselect_filter(
-            "NZ Geo Area",
+            "NZ 地理片区",
             key=area_key,
-            help_text="Select a City first, then choose a reviewed NZ Geo Area.",
+            help_text="请先选择城市，之后才能选择 NZ 地理片区。",
         )
     elif not options(filtered, "nz_geo_area"):
         disabled_multiselect_filter(
-            "NZ Geo Area",
+            "NZ 地理片区",
             key=area_key,
-            help_text="The selected City has no reviewed NZ Geo Area values.",
+            help_text="所选城市暂无已审核的 NZ 地理片区。",
         )
     else:
-        selected_area = multiselect_filter("NZ Geo Area", filtered, "nz_geo_area", key=area_key)
+        selected_area = multiselect_filter("NZ 地理片区", filtered, "nz_geo_area", key=area_key)
         if selected_area:
             filtered = filtered[filtered["nz_geo_area"].astype(str).isin(selected_area)]
 
     for label, column, key in (
-        ("NZ Business Cluster", "nz_business_cluster", "silent_nz_cluster"),
-        ("Suburb", "geo_suburb", "silent_geo_suburb"),
+        ("NZ 商圈集群", "nz_business_cluster", "silent_nz_cluster"),
+        ("街区", "geo_suburb", "silent_geo_suburb"),
     ):
         selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
@@ -352,19 +354,19 @@ def _apply_standard_geo_filters(df: pd.DataFrame, *, skip_columns: set[str] | No
 def _geo_filter_specs(scope: str) -> list[GeoFilterSpec]:
     if scope == "NZ":
         return [
-            GeoFilterSpec("City", "geo_city", "geo_city"),
-            GeoFilterSpec("NZ Geo Area", "nz_geo_area", "nz_geo_area"),
-            GeoFilterSpec("NZ Business Cluster", "nz_business_cluster", "nz_cluster"),
-            GeoFilterSpec("Suburb", "geo_suburb", "geo_suburb"),
+            GeoFilterSpec("城市", "geo_city", "geo_city"),
+            GeoFilterSpec("NZ 地理片区", "nz_geo_area", "nz_geo_area"),
+            GeoFilterSpec("NZ 商圈集群", "nz_business_cluster", "nz_cluster"),
+            GeoFilterSpec("街区", "geo_suburb", "geo_suburb"),
         ]
     if scope == "AU":
         return [
-            GeoFilterSpec("State", "geo_state", "geo_state"),
-            GeoFilterSpec("City", "geo_city", "geo_city"),
-            GeoFilterSpec("Suburb", "geo_suburb", "geo_suburb"),
-            GeoFilterSpec("Postcode", "geo_postcode", "geo_postcode"),
+            GeoFilterSpec("州/省", "geo_state", "geo_state"),
+            GeoFilterSpec("城市", "geo_city", "geo_city"),
+            GeoFilterSpec("街区", "geo_suburb", "geo_suburb"),
+            GeoFilterSpec("邮编", "geo_postcode", "geo_postcode"),
         ]
-    return [GeoFilterSpec("City", "geo_city", "geo_city")]
+    return [GeoFilterSpec("城市", "geo_city", "geo_city")]
 
 
 def _normalize_numeric(df: pd.DataFrame) -> pd.DataFrame:
@@ -460,9 +462,9 @@ def _distribution(
         out["_order"] = out["value"].map(lambda value: order_map.get(value, len(order_map)))
         out = out.sort_values(["_order", "value"]).drop(columns="_order")
     if value_map:
-        out["label"] = out["value"].map(lambda value: value_map.get(value, value or "Unclassified"))
+        out["label"] = out["value"].map(lambda value: value_map.get(value, value or "未分类"))
     else:
-        out["label"] = out["value"].replace({"UNKNOWN": "Unclassified", "": "Unclassified"})
+        out["label"] = out["value"].replace({"UNKNOWN": "未分类", "": "未分类"})
     return out[["label", "count"]]
 
 
@@ -471,7 +473,7 @@ def _area_rollup(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     working = df.copy()
     working["geo_reporting_name"] = working["geo_reporting_name"].fillna("").astype(str).str.strip()
-    working.loc[working["geo_reporting_name"] == "", "geo_reporting_name"] = "Unmatched"
+    working.loc[working["geo_reporting_name"] == "", "geo_reporting_name"] = "未匹配"
     grouped = working.groupby(["geo_country", "geo_reporting_level", "geo_reporting_name"], dropna=False).agg(
         merchant_count=("merchant_id", "count"),
         new_unactivated_180d=("silence_tier", lambda s: (s.astype(str) == "new_unactivated_180d").sum()),
@@ -490,7 +492,7 @@ def _institution_rollup(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
     working = df.copy()
     working["institution_name"] = working["institution_name"].fillna("").astype(str).str.strip()
-    working.loc[working["institution_name"] == "", "institution_name"] = "Unknown"
+    working.loc[working["institution_name"] == "", "institution_name"] = "未知机构"
     grouped = working.groupby(["institution_group", "institution_name"], dropna=False).agg(
         merchant_count=("merchant_id", "count"),
         new_unactivated_180d=("silence_tier", lambda s: (s.astype(str) == "new_unactivated_180d").sum()),
@@ -513,17 +515,17 @@ def _institution_tier_treemap(df: pd.DataFrame) -> pd.DataFrame:
 
 def _geo_level_label_en(value: object) -> str:
     mapping = {
-        "nz_geo_area": "NZ Geo Area",
-        "nz_cluster": "NZ Business Cluster",
-        "au_service_area": "AU Service Area",
-        "au_city": "AU City",
-        "au_state": "AU State",
-        "au_suburb": "AU Suburb",
-        "city": "City",
-        "suburb": "Suburb",
-        "postcode": "Postcode",
-        "country": "Country",
-        "unmatched": "Unmatched",
+        "nz_geo_area": "NZ 地理片区",
+        "nz_cluster": "NZ 商圈集群",
+        "au_service_area": "AU 服务区域",
+        "au_city": "AU 城市",
+        "au_state": "AU 州/省",
+        "au_suburb": "AU 街区",
+        "city": "城市",
+        "suburb": "街区",
+        "postcode": "邮编",
+        "country": "国家",
+        "unmatched": "未匹配",
     }
     return mapping.get(str(value or ""), str(value or ""))
 
@@ -531,11 +533,13 @@ def _geo_level_label_en(value: object) -> str:
 def _display_table(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "geo_country" in out.columns:
-        out["geo_country"] = out["geo_country"].map(lambda value: COUNTRY_LABELS_EN.get(str(value), value))
+        out["geo_country"] = out["geo_country"].map(lambda value: SILENT_COUNTRY_LABELS.get(str(value), value))
     if "silence_tier" in out.columns:
         out["silence_tier"] = out["silence_tier"].map(lambda value: SILENT_TIER_LABELS.get(str(value), value))
     if "access_age_band" in out.columns:
         out["access_age_band"] = out["access_age_band"].map(lambda value: SILENT_ACCESS_AGE_LABELS.get(str(value), value))
+    if "business_type" in out.columns:
+        out["business_type"] = out["business_type"].map(lambda value: SILENT_BUSINESS_TYPE_LABELS.get(str(value), value))
     if "address_coverage" in out.columns:
         out["address_coverage"] = out["address_coverage"].map(_format_rate_value)
     return out.rename(columns={key: value for key, value in _COLUMN_LABELS.items() if key in out.columns})
@@ -552,8 +556,8 @@ def _sample_notice(summary: object, rows: pd.DataFrame) -> None:
     detail_count = int(float(summary.get("detail_row_count") or len(rows)))
     if aggregate_count and detail_count and detail_count < aggregate_count:
         st.info(
-            f"Current detail rows are a sample ({detail_count:,} of {aggregate_count:,} aggregate merchants). "
-            "Charts, filters, and exports reflect the loaded detail rows."
+            f"当前加载的明细行为抽样数据（{detail_count:,} / {aggregate_count:,} 个汇总商户）。"
+            "图表、筛选器和导出均基于已加载明细行。"
         )
 
 
@@ -563,31 +567,31 @@ def _format_rate_value(value: object) -> str:
 
 
 _COLUMN_LABELS = {
-    "merchant_id": "Merchant ID",
-    "merchant_display_name": "Merchant Name",
-    "institution_group": "Institution Group",
-    "institution_name": "Institution",
-    "geo_country": "Country",
-    "geo_state": "State",
-    "geo_city": "City",
-    "geo_suburb": "Suburb",
-    "geo_postcode": "Postcode",
-    "geo_reporting_level": "Geo Level Code",
-    "geo_reporting_level_label": "Geo Level",
-    "geo_reporting_name": "Geo Reporting Name",
-    "nz_geo_area": "NZ Geo Area",
-    "silence_tier": "Silence Tier",
-    "access_age_band": "Access Age Band",
-    "merchant_access_time": "Access Time",
-    "business_type": "Business Type",
-    "mcc_code": "MCC Code",
-    "txn_count_360d": "Txn Count 360d",
-    "txn_amount_360d": "Txn Amount 360d",
-    "address": "Address",
-    "merchant_count": "Merchant Count",
-    "new_unactivated_180d": "New Unactivated 180d",
-    "initial_silent": "Initial Silent",
-    "deep_silent": "Deep Silent",
-    "address_count": "Address Count",
-    "address_coverage": "Address Coverage",
+    "merchant_id": "商户MID",
+    "merchant_display_name": "商户名称",
+    "institution_group": "机构分组",
+    "institution_name": "机构",
+    "geo_country": "国家",
+    "geo_state": "州/省",
+    "geo_city": "城市",
+    "geo_suburb": "街区",
+    "geo_postcode": "邮编",
+    "geo_reporting_level": "地理层级代码",
+    "geo_reporting_level_label": "地理层级",
+    "geo_reporting_name": "地理展示名称",
+    "nz_geo_area": "NZ 地理片区",
+    "silence_tier": "沉默分层",
+    "access_age_band": "接入时长",
+    "merchant_access_time": "接入时间",
+    "business_type": "业务类型",
+    "mcc_code": "MCC代码",
+    "txn_count_360d": "近360天交易笔数",
+    "txn_amount_360d": "近360天交易金额",
+    "address": "地址",
+    "merchant_count": "商户数",
+    "new_unactivated_180d": "新接入180天未激活",
+    "initial_silent": "初始沉默",
+    "deep_silent": "深度沉默",
+    "address_count": "有地址商户数",
+    "address_coverage": "地址覆盖率",
 }
