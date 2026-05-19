@@ -15,9 +15,12 @@ from data_loader import DataLoadError, validate_project  # noqa: E402
 from pages_or_modules.rate_coupon_activity import (  # noqa: E402
     METRIC_OPTIONS,
     filter_month_range,
+    issued_redeemed_trend_option,
     latest_month,
+    monthly_trend,
     month_options,
     stacked_stock_option,
+    stock_name_option_map,
     stock_totals,
     summary_metrics,
 )
@@ -104,6 +107,14 @@ def test_rate_coupon_page_helpers_sort_filter_and_summarize(tmp_path: Path) -> N
     assert totals["stock_id"].tolist() == ["stv2-1742544739781708", "stv2-1761807586025667"]
 
 
+def test_rate_coupon_stock_name_options_map_to_stock_ids(tmp_path: Path) -> None:
+    rows = build_rate_coupon_monthly(_fixture_path(tmp_path))
+    options = stock_name_option_map(rows)
+
+    assert list(options.values()) == [["stv2-1742544739781708"], ["stv2-1761807586025667"]]
+    assert all("(stv2-" not in label for label in options)
+
+
 def test_rate_coupon_page_uses_english_internal_keys(tmp_path: Path) -> None:
     assert list(PAGE_LABELS) == [
         "new_intake",
@@ -113,12 +124,22 @@ def test_rate_coupon_page_uses_english_internal_keys(tmp_path: Path) -> None:
     ]
     assert all(key.isascii() for key in PAGE_LABELS)
     assert all(option.isascii() for option in METRIC_OPTIONS)
+    assert METRIC_OPTIONS[0] == "issued_coupon_code_count"
 
     rows = build_rate_coupon_monthly(_fixture_path(tmp_path))
     option = stacked_stock_option(rows, metric="redeeming_submerchant_count", title="demo")
 
     assert option["series"][0]["name"] == "新西兰-餐饮行业汇率"
     assert option["series"][0]["type"] == "bar"
+    assert option["legend"]["bottom"] == 0
+
+    trend_option = issued_redeemed_trend_option(monthly_trend(rows), title="demo")
+    assert [series["name"] for series in trend_option["series"]] == [
+        "领券数量",
+        "核销券码数",
+        "核销率",
+    ]
+    assert trend_option["series"][2]["yAxisIndex"] == 1
 
 
 def test_manifest_schema_guard_requires_rate_coupon_activity() -> None:

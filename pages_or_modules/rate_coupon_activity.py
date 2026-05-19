@@ -6,13 +6,14 @@ import pandas as pd
 import streamlit as st
 
 from charts import PALETTE, empty_chart, horizontal_bar_option, render_echart
-from filters import apply_text_filter, mapped_multiselect_filter, multiselect_filter
+from filters import apply_text_filter, mapped_multiselect_filter
 from metrics import format_int, format_money, sum_number
 from ui_labels import COUNTRY_LABELS, display_table
 
 
 PAGE_ID = "rate_coupon_activity"
 METRIC_OPTIONS = (
+    "issued_coupon_code_count",
     "redeeming_submerchant_count",
     "redeemed_coupon_code_count_trade",
     "cost_money_yuan",
@@ -33,8 +34,9 @@ UI_TEXT = {
     "sidebar": "重点汇率活动筛选",
     "month_range": "月份范围",
     "country": "国家",
-    "stock": "活动批次",
-    "metric": "堆叠图指标",
+    "stock": "批次名称",
+    "stock_help": "可多选；不选择时显示全部批次。",
+    "metric": "趋势图指标",
     "keyword": "批次/国家/stockid 关键词",
     "tab_overview": "总览",
     "tab_stock": "批次",
@@ -45,15 +47,18 @@ UI_TEXT = {
     "latest_redeemed_coupons": "最新月核销券码数",
     "latest_cost": "最新月成本",
     "active_trend": "月度核销活跃商户数趋势",
+    "issued_redeemed_trend": "领券与核销月度趋势",
     "redeemed_trend": "月度核销券码数趋势",
     "cost_trend": "月度成本消耗趋势",
-    "stock_stack": "按批次月度趋势",
+    "stock_stack": "按批次月度领券数量",
     "stock_redeemed_rank": "批次累计核销券码数排名",
     "stock_cost_rank": "批次累计成本排名",
 }
 
 METRIC_LABELS = {
     "redeeming_submerchant_count": "活跃商户数",
+    "issued_coupon_code_count": "领券数量",
+    "stock_stack": "按批次领券数量",
     "redeemed_coupon_code_count_trade": "核销券码数",
     "cost_money_yuan": "成本金额",
 }
@@ -123,16 +128,12 @@ def render_rate_coupon_activity_page(data: dict[str, object]) -> None:
             )
         with c2:
             render_echart(
-                line_option(
+                issued_redeemed_trend_option(
                     trend,
-                    x="month_label",
-                    y="redeemed_coupon_code_count_trade",
-                    title=UI_TEXT["redeemed_trend"],
-                    series_name=METRIC_LABELS["redeemed_coupon_code_count_trade"],
-                    color=PALETTE["green"],
+                    title=UI_TEXT["issued_redeemed_trend"],
                 ),
-                key="chart_rate_coupon_redeemed_trend",
-                height=340,
+                key="chart_rate_coupon_issued_redeemed_trend",
+                height=360,
             )
 
         c1, c2 = st.columns(2)
@@ -150,21 +151,15 @@ def render_rate_coupon_activity_page(data: dict[str, object]) -> None:
                 height=340,
             )
         with c2:
-            metric_key = st.radio(
-                UI_TEXT["metric"],
-                METRIC_OPTIONS,
-                format_func=lambda value: METRIC_LABELS.get(str(value), str(value)),
-                horizontal=True,
-                key="rate_coupon_stack_metric",
-            )
+            metric_key = "stock_stack"
             render_echart(
                 stacked_stock_option(
                     filtered,
-                    metric=str(metric_key),
-                    title=f"{UI_TEXT['stock_stack']}：{METRIC_LABELS[str(metric_key)]}",
+                    metric="issued_coupon_code_count",
+                    title=f"{METRIC_LABELS[metric_key]}月度趋势",
                 ),
-                key=f"chart_rate_coupon_stock_stack_{metric_key}",
-                height=340,
+                key="chart_rate_coupon_issued_stock_stack",
+                height=360,
             )
 
     with tab_stock:
@@ -245,14 +240,7 @@ def _sidebar_filters(monthly: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataFr
     if selected_country:
         filtered = filtered[filtered["country_group"].astype(str).isin(selected_country)]
 
-    stock_labels = stock_label_map(metadata if not metadata.empty else filtered)
-    selected_stock = mapped_multiselect_filter(
-        UI_TEXT["stock"],
-        filtered,
-        "stock_id",
-        key="rate_coupon_stock",
-        value_map=stock_labels,
-    )
+    selected_stock = stock_name_multiselect_filter(filtered, key="rate_coupon_stock_name")
     if selected_stock:
         filtered = filtered[filtered["stock_id"].astype(str).isin(selected_stock)]
 
@@ -409,6 +397,66 @@ def stock_label_map(df: pd.DataFrame) -> dict[str, str]:
     return labels
 
 
+def stock_name_multiselect_filter(df: pd.DataFrame, *, key: str) -> list[str]:
+    option_map = stock_name_option_map(df)
+    if not option_map:
+        return []
+    labels = list(option_map)
+    _prune_stock_name_state(key, labels)
+    selected_labels = st.sidebar.multiselect(
+        UI_TEXT["stock"],
+        labels,
+        key=key,
+        help=UI_TEXT["stock_help"],
+    )
+    selected_ids: list[str] = []
+    for label in selected_labels:
+        selected_ids.extend(option_map.get(label, []))
+    return selected_ids
+
+
+def stock_name_option_map(df: pd.DataFrame) -> dict[str, list[str]]:
+    if df.empty or "stock_id" not in df.columns:
+        return {}
+    ordered = df.copy()
+    if "stock_sort_order" in ordered.columns:
+        ordered = ordered.sort_values(["stock_sort_order", "stock_id"], kind="stable")
+
+    records: list[tuple[str, str]] = []
+    for row in ordered.to_dict("records"):
+        stock_id = str(row.get("stock_id") or "").strip()
+        if not stock_id:
+            continue
+        label = str(row.get("stock_label") or row.get("stock_name_cn") or stock_id).strip() or stock_id
+        records.append((stock_id, label))
+
+    label_stock_ids: dict[str, set[str]] = {}
+    for stock_id, label in records:
+        label_stock_ids.setdefault(label, set()).add(stock_id)
+
+    options: dict[str, list[str]] = {}
+    seen_stock_ids: set[str] = set()
+    for stock_id, label in records:
+        if stock_id in seen_stock_ids:
+            continue
+        seen_stock_ids.add(stock_id)
+        display_label = f"{label} ({stock_id})" if len(label_stock_ids[label]) > 1 else label
+        options.setdefault(display_label, []).append(stock_id)
+    return options
+
+
+def _prune_stock_name_state(key: str, valid_labels: list[str]) -> None:
+    if key not in st.session_state:
+        return
+    current = st.session_state.get(key)
+    if not isinstance(current, list):
+        return
+    valid = set(valid_labels)
+    pruned = [label for label in current if label in valid]
+    if pruned != current:
+        st.session_state[key] = pruned
+
+
 def line_option(
     df: pd.DataFrame,
     *,
@@ -437,6 +485,62 @@ def line_option(
     }
 
 
+def issued_redeemed_trend_option(df: pd.DataFrame, *, title: str) -> dict[str, Any]:
+    rows = df.to_dict("records")
+    issued_values = [_number_value(row.get("issued_coupon_code_count")) for row in rows]
+    redeemed_values = [_number_value(row.get("redeemed_coupon_code_count_trade")) for row in rows]
+    redemption_rates = [
+        round((redeemed / issued) * 100, 1) if issued else 0
+        for issued, redeemed in zip(issued_values, redeemed_values, strict=False)
+    ]
+    return _base_option(title) | {
+        "legend": {"bottom": 0, "left": 12, "textStyle": {"color": "#5c6c75"}},
+        "grid": {"left": 72, "right": 72, "top": 62, "bottom": 88},
+        "xAxis": _category_axis([_json_value(row.get("month_label")) for row in rows], rotate=35),
+        "yAxis": [
+            _value_axis("券码数"),
+            {
+                "type": "value",
+                "name": "核销率",
+                "nameTextStyle": {"color": "#5c6c75"},
+                "axisLabel": {"color": "#5c6c75", "formatter": "{value}%"},
+                "axisLine": {"lineStyle": {"color": "#b8c4c2"}},
+                "splitLine": {"show": False},
+            },
+        ],
+        "series": [
+            {
+                "name": METRIC_LABELS["issued_coupon_code_count"],
+                "type": "line",
+                "smooth": True,
+                "symbolSize": 7,
+                "lineStyle": {"width": 4, "color": PALETTE["dark_green"]},
+                "itemStyle": {"color": PALETTE["dark_green"], "borderColor": PALETTE["white"], "borderWidth": 2},
+                "data": [_json_value(value) for value in issued_values],
+            },
+            {
+                "name": METRIC_LABELS["redeemed_coupon_code_count_trade"],
+                "type": "line",
+                "smooth": True,
+                "symbolSize": 7,
+                "lineStyle": {"width": 4, "color": PALETTE["blue"]},
+                "itemStyle": {"color": PALETTE["blue"], "borderColor": PALETTE["white"], "borderWidth": 2},
+                "data": [_json_value(value) for value in redeemed_values],
+            },
+            {
+                "name": "核销率",
+                "type": "line",
+                "yAxisIndex": 1,
+                "smooth": True,
+                "symbolSize": 6,
+                "lineStyle": {"width": 3, "type": "dashed", "color": PALETTE["cyan"]},
+                "itemStyle": {"color": PALETTE["cyan"], "borderColor": PALETTE["white"], "borderWidth": 2},
+                "data": redemption_rates,
+            },
+        ],
+    }
+
+
 def stacked_stock_option(df: pd.DataFrame, *, metric: str, title: str) -> dict[str, Any]:
     months = month_options(df)
     stocks = (
@@ -461,7 +565,8 @@ def stacked_stock_option(df: pd.DataFrame, *, metric: str, title: str) -> dict[s
             }
         )
     return _base_option(title) | {
-        "legend": {"top": 8, "right": 12, "textStyle": {"color": "#5c6c75"}},
+        "legend": {"bottom": 0, "left": 12, "textStyle": {"color": "#5c6c75"}},
+        "grid": {"left": 72, "right": 42, "top": 62, "bottom": 92},
         "xAxis": _category_axis(months, rotate=35),
         "yAxis": _value_axis(METRIC_LABELS.get(metric, metric)),
         "series": series,
@@ -532,6 +637,13 @@ def _safe_ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     top = pd.to_numeric(numerator, errors="coerce").fillna(0)
     bottom = pd.to_numeric(denominator, errors="coerce").fillna(0)
     return top.divide(bottom.mask(bottom.eq(0))).fillna(0).round(4)
+
+
+def _number_value(value: Any) -> float:
+    try:
+        return float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _json_value(value: Any) -> Any:
