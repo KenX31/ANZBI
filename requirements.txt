@@ -1,5 +1,6 @@
 streamlit>=1.36
 streamlit-echarts>=0.4
 streamlit-ldap-authenticator==0.2.6
+streamlit-cookies-controller==0.0.4
 pandas>=2.2
 requests>=2.32

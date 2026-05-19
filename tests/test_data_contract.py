@@ -16,6 +16,9 @@ from auth import (
     AuthSettings,
     _authenticate_local_user,
     _authorization_check,
+    _local_user_from_auth_token,
+    _make_local_auth_token,
+    _should_renew_local_auth_token,
     can_export_data,
     make_password_hash,
     resolve_auth_settings,
@@ -55,6 +58,27 @@ from pages_or_modules.silent_merchants import (
     _geo_filter_specs,
 )
 from scripts.build_private_data_project import _new_intake_source_period, _silent_rows
+
+
+def _local_cookie_auth_settings(username: str, user_config: dict[str, object]) -> AuthSettings:
+    return AuthSettings(
+        enabled=True,
+        provider="local",
+        ldap=None,
+        local_users={username.casefold(): user_config},
+        session_state_names=None,
+        auth_cookie={
+            "name": "anz_bi_login_cookie",
+            "key": "unit-test-cookie-signing-key",
+            "expiry_days": 7,
+            "auto_renewal": True,
+        },
+        encryptor=None,
+        signin_form={},
+        signout_form={},
+        allowed_users=(),
+        allowed_domains=(),
+    )
 
 
 def test_auth_settings_auto_disabled_without_ldap_config() -> None:
@@ -173,8 +197,84 @@ def test_local_user_authentication_returns_admin_identity() -> None:
     assert _authenticate_local_user(settings, "v_kenhzxia@global.tencent.com", "wrong") is None
 
 
+def test_local_auth_token_restores_user_and_permissions() -> None:
+    password_hash = make_password_hash("monica", salt=b"1234567890abcdef")
+    settings = _local_cookie_auth_settings(
+        "monicazheng@tencent.com",
+        {
+            "name": "Monica",
+            "role": "Boss",
+            "permissions": ["Boss"],
+            "password_hash": password_hash,
+        },
+    )
+
+    token = _make_local_auth_token(settings, "MonicaZheng@Tencent.com", now=1_000)
+    user = _local_user_from_auth_token(settings, token, now=1_001)
+
+    assert token is not None
+    assert user is not None
+    assert user["displayName"] == "Monica"
+    assert user["permissions"] == ["Boss"]
+    assert can_export_data(user) is True
+
+
+def test_local_auth_token_blocks_invalid_or_stale_tokens() -> None:
+    password_hash = make_password_hash("monica", salt=b"1234567890abcdef")
+    settings = _local_cookie_auth_settings(
+        "monicazheng@tencent.com",
+        {
+            "name": "Monica",
+            "role": "Boss",
+            "permissions": ["Boss"],
+            "password_hash": password_hash,
+        },
+    )
+    token = _make_local_auth_token(settings, "monicazheng@tencent.com", now=1_000)
+    assert token is not None
+
+    assert _local_user_from_auth_token(settings, f"{token}x", now=1_001) is None
+    assert _local_user_from_auth_token(settings, token, now=1_000 + 7 * 24 * 60 * 60 + 1) is None
+
+    missing_user_settings = _local_cookie_auth_settings("someone@example.com", settings.local_users["monicazheng@tencent.com"])
+    assert _local_user_from_auth_token(missing_user_settings, token, now=1_001) is None
+
+    changed_password_settings = _local_cookie_auth_settings(
+        "monicazheng@tencent.com",
+        {
+            "name": "Monica",
+            "role": "Boss",
+            "permissions": ["Boss"],
+            "password_hash": make_password_hash("new-password", salt=b"abcdef1234567890"),
+        },
+    )
+    assert _local_user_from_auth_token(changed_password_settings, token, now=1_001) is None
+
+
+def test_local_auth_token_preserves_viewer_export_restriction_and_renews_halfway() -> None:
+    password_hash = make_password_hash("leoxiang", salt=b"1234567890abcdef")
+    settings = _local_cookie_auth_settings(
+        "v_manxiang@global.tencent.com",
+        {
+            "name": "v_manxiang",
+            "role": "viewer",
+            "permissions": ["viewer"],
+            "password_hash": password_hash,
+        },
+    )
+
+    token = _make_local_auth_token(settings, "v_manxiang@global.tencent.com", now=1_000)
+    user = _local_user_from_auth_token(settings, token, now=1_001)
+
+    assert user is not None
+    assert can_export_data(user) is False
+    assert _should_renew_local_auth_token(settings, token, now=1_001) is False
+    assert _should_renew_local_auth_token(settings, token, now=1_000 + 4 * 24 * 60 * 60) is True
+
+
 def test_export_permission_blocks_viewer_and_allows_user() -> None:
     assert can_export_data({"permissions": ["viewer"]}) is False
+    assert can_export_data({"permissions": ["Boss"]}) is True
     assert can_export_data({"permissions": ["user"]}) is True
     assert can_export_data({"permissions": ["*"]}) is True
     assert can_export_data({"permissions": ["viewer", "export"]}) is True
@@ -518,6 +618,24 @@ def test_silent_rows_preserve_ids_and_copy_stores_address_for_geo_matching() -> 
     assert rows.loc[0, "address"] == "1 Queen Street Auckland 1010"
     assert staged.loc[0, "staging_city"] == "Auckland"
     assert staged.loc[0, "staging_geo_area"] == "Central Auckland"
+
+
+def test_silent_rows_strip_bom_from_snapshot_column() -> None:
+    raw = pd.DataFrame(
+        [
+            {
+                "\ufeffsnapshot_ds": "20260501",
+                "country_group": "AU",
+                "merchant_country_code": "036",
+                "merchant_id": "823448011",
+                "stores_address": "VIC - Syndal - Unit902/108 Queens Rd",
+            }
+        ]
+    )
+
+    rows = _silent_rows(raw)
+
+    assert rows.loc[0, "snapshot_ds"] == "20260501"
 
 
 def test_silent_page_helpers_sort_filter_and_keep_country_aware_geo_specs() -> None:

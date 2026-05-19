@@ -88,6 +88,13 @@ role = "admin"
 permissions = ["*"]
 password_hash = "pbkdf2_sha256$260000$..."
 
+[auth_cookie]
+name = "anz_bi_login_cookie"
+key = "replace-with-a-long-random-cookie-signing-key"
+expiry_days = 7
+auto_renewal = true
+delay_sec = 0.1
+
 [auth]
 allowed_domains = ["example.com"]
 allowed_users = []
@@ -99,10 +106,17 @@ Generate a password hash locally:
 python -c "from auth import make_password_hash; print(make_password_hash('replace-with-password'))"
 ```
 
+For local accounts, the login form's "keep signed in" checkbox stores a signed
+browser cookie for `auth_cookie.expiry_days`. The cookie does not store the
+password; it is invalidated if the account is removed or the password hash
+changes. When `auto_renewal = true`, a valid remembered login is refreshed as it
+approaches expiry.
+
 Export permission is controlled by the `permissions` list:
 
 - `["viewer"]`: can view pages, charts, and tables, but export buttons are hidden
 - `["user"]`: can view and export
+- `["Boss"]`: can view and export
 - `["*"]`: full export access
 
 Optional LDAP secrets:
@@ -121,7 +135,7 @@ use_ssl = true
 [auth_cookie]
 name = "anz_bi_login_cookie"
 key = "replace-with-a-long-random-cookie-signing-key"
-expiry_days = 1
+expiry_days = 7
 auto_renewal = true
 delay_sec = 0.1
 

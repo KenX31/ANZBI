@@ -550,7 +550,7 @@ def _select_frame_columns(df: pd.DataFrame, fields: list[str]) -> pd.DataFrame:
 
 def _normalize_text_frame(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    out.columns = [str(column).strip() for column in out.columns]
+    out.columns = [str(column).replace("\ufeff", "").strip() for column in out.columns]
     for column in out.columns:
         if pd.api.types.is_object_dtype(out[column]) or pd.api.types.is_string_dtype(out[column]):
             out[column] = out[column].fillna("").astype(str).str.replace("\u00a0", " ", regex=False).str.strip()
