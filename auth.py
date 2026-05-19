@@ -3,9 +3,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import secrets as py_secrets
+import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any, Mapping
 
 import streamlit as st
@@ -16,9 +19,11 @@ FALSE_VALUES = {"0", "false", "no", "n", "off", "disabled"}
 AUTH_PROVIDERS = {"local", "ldap"}
 LOCAL_USER_SESSION_KEY = "anz_bi_local_user"
 CURRENT_USER_SESSION_KEY = "anz_bi_current_user"
+LOCAL_COOKIE_CONTROLLER_KEY = "anz_bi_local_cookie_controller"
 EXPORT_PERMISSIONS = {"*", "admin", "boss", "user", "export", "download", "can_export"}
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 260_000
+DEFAULT_AUTH_COOKIE_NAME = "anz_bi_login_cookie"
 
 DEFAULT_SIGNIN_FORM = {
     "maxWidth": 460,
@@ -215,12 +220,78 @@ def verify_password(password: str, encoded_hash: str) -> bool:
     return hmac.compare_digest(actual, expected)
 
 
+def _make_local_auth_token(settings: AuthSettings, username: str, *, now: float | None = None) -> str | None:
+    signing_key = _local_auth_cookie_key(settings)
+    if not signing_key:
+        return None
+    normalized_username = str(username or "").strip().casefold()
+    user_config = settings.local_users.get(normalized_username)
+    if not user_config:
+        return None
+    max_age_seconds = _auth_cookie_max_age_seconds(settings)
+    if max_age_seconds <= 0:
+        return None
+    issued_at = int(time.time() if now is None else now)
+    password_hash = str(user_config.get("password_hash") or "")
+    payload = {
+        "v": 1,
+        "sub": normalized_username,
+        "iat": issued_at,
+        "exp": issued_at + max_age_seconds,
+        "pwd": _password_hash_fingerprint(password_hash),
+    }
+    payload_text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload_part = _urlsafe_b64encode(payload_text.encode("utf-8"))
+    signature = _local_auth_token_signature(signing_key, payload_part)
+    return f"{payload_part}.{signature}"
+
+
+def _local_user_from_auth_token(
+    settings: AuthSettings,
+    token: str | None,
+    *,
+    now: float | None = None,
+) -> dict[str, Any] | None:
+    payload = _local_auth_token_payload(settings, token)
+    if not payload:
+        return None
+    expires_at = _payload_int(payload.get("exp"))
+    if expires_at is None or expires_at <= int(time.time() if now is None else now):
+        return None
+    username = str(payload.get("sub") or "").strip().casefold()
+    if not username:
+        return None
+    user_config = settings.local_users.get(username)
+    if not user_config:
+        return None
+    password_hash = str(user_config.get("password_hash") or "")
+    expected_fingerprint = _password_hash_fingerprint(password_hash)
+    actual_fingerprint = str(payload.get("pwd") or "")
+    if not hmac.compare_digest(actual_fingerprint, expected_fingerprint):
+        return None
+    user = _local_user_info(username, user_config)
+    result = _authorization_check(settings)(None, user)
+    return user if result is True else None
+
+
 def _require_local_login(settings: AuthSettings) -> dict[str, Any]:
     current_user = st.session_state.get(LOCAL_USER_SESSION_KEY)
     if isinstance(current_user, dict):
         st.session_state[CURRENT_USER_SESSION_KEY] = current_user
         _render_local_logout(current_user, settings)
         return current_user
+
+    auth_cookie_token = _read_local_auth_cookie(settings)
+    remembered_user = _local_user_from_auth_token(settings, auth_cookie_token)
+    if remembered_user is not None:
+        st.session_state[LOCAL_USER_SESSION_KEY] = remembered_user
+        st.session_state[CURRENT_USER_SESSION_KEY] = remembered_user
+        if _auth_cookie_auto_renewal(settings) and _should_renew_local_auth_token(settings, auth_cookie_token):
+            _write_local_auth_cookie(settings, str(remembered_user.get("userPrincipalName") or ""))
+        _render_local_logout(remembered_user, settings)
+        return remembered_user
+    if auth_cookie_token:
+        _clear_local_auth_cookie(settings)
 
     title = _form_text(settings.signin_form, ("title", "text"), "ANZ BI 登录")
     username_label = _form_text(settings.signin_form, ("username", "label"), "账号")
@@ -229,10 +300,13 @@ def _require_local_login(settings: AuthSettings) -> dict[str, Any]:
     password_placeholder = _form_text(settings.signin_form, ("password", "placeholder"), "请输入密码")
     submit_label = _form_text(settings.signin_form, ("submit", "label"), "登录")
 
+    remember_label = _form_text(settings.signin_form, ("remember", "label"), "保持登录")
+
     st.subheader(title)
     with st.form("anz_bi_local_login_form"):
         username = st.text_input(username_label, placeholder=username_placeholder)
         password = st.text_input(password_label, placeholder=password_placeholder, type="password")
+        remember_login = st.checkbox(remember_label)
         submitted = st.form_submit_button(submit_label, use_container_width=True)
 
     if submitted:
@@ -242,6 +316,8 @@ def _require_local_login(settings: AuthSettings) -> dict[str, Any]:
         else:
             st.session_state[LOCAL_USER_SESSION_KEY] = user
             st.session_state[CURRENT_USER_SESSION_KEY] = user
+            if remember_login and not _write_local_auth_cookie(settings, str(user.get("userPrincipalName") or "")):
+                st.warning("当前环境暂时无法写入浏览器 Cookie，本次将仅保持当前会话登录。")
             st.rerun()
     st.stop()
 
@@ -277,6 +353,163 @@ def _local_user_info(username: str, user_config: Mapping[str, Any]) -> dict[str,
     }
 
 
+def _read_local_auth_cookie(settings: AuthSettings) -> str | None:
+    cookie_name = _auth_cookie_name(settings)
+    try:
+        value = st.context.cookies.get(cookie_name)
+    except Exception:
+        value = None
+    if value:
+        return str(value)
+
+    controller = _local_cookie_controller()
+    if controller is None:
+        return None
+    try:
+        value = controller.get(cookie_name)
+    except Exception:
+        return None
+    return str(value) if value else None
+
+
+def _write_local_auth_cookie(settings: AuthSettings, username: str) -> bool:
+    token = _make_local_auth_token(settings, username)
+    if not token:
+        return False
+    controller = _local_cookie_controller()
+    if controller is None:
+        return False
+    max_age_seconds = _auth_cookie_max_age_seconds(settings)
+    expires = datetime.now() + timedelta(seconds=max_age_seconds)
+    try:
+        controller.set(
+            _auth_cookie_name(settings),
+            token,
+            expires=expires,
+            max_age=max_age_seconds,
+            same_site="strict",
+        )
+    except Exception:
+        return False
+    return True
+
+
+def _clear_local_auth_cookie(settings: AuthSettings) -> None:
+    controller = _local_cookie_controller()
+    if controller is None:
+        return
+    cookie_name = _auth_cookie_name(settings)
+    try:
+        controller.remove(cookie_name)
+    except Exception:
+        try:
+            controller.set(cookie_name, "", expires=datetime.now() - timedelta(days=1), max_age=0, same_site="strict")
+        except Exception:
+            return
+
+
+def _local_cookie_controller() -> Any | None:
+    try:
+        from streamlit_cookies_controller import CookieController
+    except ImportError:
+        return None
+    try:
+        return CookieController(key=LOCAL_COOKIE_CONTROLLER_KEY)
+    except Exception:
+        return None
+
+
+def _local_auth_token_payload(settings: AuthSettings, token: str | None) -> dict[str, Any] | None:
+    signing_key = _local_auth_cookie_key(settings)
+    if not signing_key or not token:
+        return None
+    try:
+        payload_part, signature = str(token).split(".", 1)
+    except ValueError:
+        return None
+    try:
+        expected_signature = _local_auth_token_signature(signing_key, payload_part)
+    except UnicodeError:
+        return None
+    if not hmac.compare_digest(signature, expected_signature):
+        return None
+    try:
+        payload = json.loads(_urlsafe_b64decode(payload_part).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or payload.get("v") != 1:
+        return None
+    return payload
+
+
+def _should_renew_local_auth_token(settings: AuthSettings, token: str | None, *, now: float | None = None) -> bool:
+    payload = _local_auth_token_payload(settings, token)
+    if not payload:
+        return False
+    issued_at = _payload_int(payload.get("iat"))
+    expires_at = _payload_int(payload.get("exp"))
+    if issued_at is None or expires_at is None:
+        return False
+    now_seconds = int(time.time() if now is None else now)
+    token_lifetime = max(0, expires_at - issued_at)
+    remaining = expires_at - now_seconds
+    configured_lifetime = _auth_cookie_max_age_seconds(settings)
+    renewal_window = max(token_lifetime, configured_lifetime) / 2
+    return 0 < remaining <= renewal_window
+
+
+def _local_auth_token_signature(signing_key: str, payload_part: str) -> str:
+    digest = hmac.new(signing_key.encode("utf-8"), payload_part.encode("ascii"), hashlib.sha256).digest()
+    return _urlsafe_b64encode(digest)
+
+
+def _local_auth_cookie_key(settings: AuthSettings) -> str:
+    auth_cookie = settings.auth_cookie or {}
+    key = str(auth_cookie.get("key") or "").strip()
+    if not key or key == "replace-with-a-long-random-cookie-signing-key":
+        return ""
+    return key
+
+
+def _auth_cookie_name(settings: AuthSettings) -> str:
+    auth_cookie = settings.auth_cookie or {}
+    return str(auth_cookie.get("name") or DEFAULT_AUTH_COOKIE_NAME).strip() or DEFAULT_AUTH_COOKIE_NAME
+
+
+def _auth_cookie_max_age_seconds(settings: AuthSettings) -> int:
+    auth_cookie = settings.auth_cookie or {}
+    try:
+        expiry_days = float(auth_cookie.get("expiry_days", 1))
+    except (TypeError, ValueError):
+        expiry_days = 1.0
+    return max(0, int(expiry_days * 24 * 60 * 60))
+
+
+def _auth_cookie_auto_renewal(settings: AuthSettings) -> bool:
+    auth_cookie = settings.auth_cookie or {}
+    return _config_bool(auth_cookie.get("auto_renewal"), default=False)
+
+
+def _password_hash_fingerprint(encoded_hash: str) -> str:
+    return hashlib.sha256(str(encoded_hash or "").encode("utf-8")).hexdigest()
+
+
+def _payload_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _urlsafe_b64encode(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def _urlsafe_b64decode(value: str) -> bytes:
+    padded = value + ("=" * (-len(value) % 4))
+    return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+
 def _render_local_logout(user: Mapping[str, Any], settings: AuthSettings) -> None:
     label = _form_text(settings.signout_form, ("submit", "label"), "退出登录")
     display_name = _display_name(user)
@@ -287,6 +520,7 @@ def _render_local_logout(user: Mapping[str, Any], settings: AuthSettings) -> Non
         if st.button(label, key="anz_bi_local_logout", use_container_width=True):
             st.session_state.pop(LOCAL_USER_SESSION_KEY, None)
             st.session_state.pop(CURRENT_USER_SESSION_KEY, None)
+            _clear_local_auth_cookie(settings)
             st.rerun()
 
 
@@ -454,6 +688,17 @@ def _normalized_domains(secret_value: Any, env_value: str | None = None) -> tupl
         if value:
             values.append(value)
     return tuple(values)
+
+
+def _config_bool(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = str(value).strip().casefold()
+    if normalized in TRUE_VALUES:
+        return True
+    if normalized in FALSE_VALUES:
+        return False
+    return default
 
 
 def _secrets_mapping(secrets: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
