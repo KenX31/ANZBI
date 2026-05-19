@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import importlib
+
 import streamlit as st
 
 from auth import AuthConfigError, require_login
-from data_loader import (
-    DataLoadError,
-    load_page_data,
-    load_project_manifest,
-    validate_page_dataset,
-    validate_project_metadata,
-)
+import data_loader as data_loader_module
 from pages_or_modules.activation_low_activity import render_activation_page
 from pages_or_modules.new_intake import render_new_intake_page
 from pages_or_modules.rate_coupon_activity import render_rate_coupon_activity_page
 from pages_or_modules.silent_merchants import render_silent_merchants_page
 from ui_labels import PAGE_LABELS
+
+
+if not hasattr(data_loader_module, "load_page_data"):
+    data_loader_module = importlib.reload(data_loader_module)
+
+DataLoadError = data_loader_module.DataLoadError
+load_page_data = data_loader_module.load_page_data
+load_project_manifest = data_loader_module.load_project_manifest
+validate_page_dataset = data_loader_module.validate_page_dataset
+validate_project_metadata = data_loader_module.validate_project_metadata
 
 
 st.set_page_config(
