@@ -175,6 +175,7 @@ def test_local_user_authentication_returns_admin_identity() -> None:
 
 def test_export_permission_blocks_viewer_and_allows_user() -> None:
     assert can_export_data({"permissions": ["viewer"]}) is False
+    assert can_export_data({"permissions": ["Boss"]}) is True
     assert can_export_data({"permissions": ["user"]}) is True
     assert can_export_data({"permissions": ["*"]}) is True
     assert can_export_data({"permissions": ["viewer", "export"]}) is True

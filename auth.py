@@ -16,7 +16,7 @@ FALSE_VALUES = {"0", "false", "no", "n", "off", "disabled"}
 AUTH_PROVIDERS = {"local", "ldap"}
 LOCAL_USER_SESSION_KEY = "anz_bi_local_user"
 CURRENT_USER_SESSION_KEY = "anz_bi_current_user"
-EXPORT_PERMISSIONS = {"*", "admin", "user", "export", "download", "can_export"}
+EXPORT_PERMISSIONS = {"*", "admin", "boss", "user", "export", "download", "can_export"}
 PASSWORD_HASH_ALGORITHM = "pbkdf2_sha256"
 PASSWORD_HASH_ITERATIONS = 260_000
 
