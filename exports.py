@@ -54,17 +54,12 @@ NEW_INTAKE_INTERNAL_COLUMNS = [
 
 ACTIVATION_PROVIDER_COLUMNS = [
     "商家名",
-    "国家",
-    "州/省",
     "所在城市",
-    "Suburb",
-    "Postcode",
-    "地理展示名称",
     "NZ地理片区",
-    "NZ Cluster",
-    "服务商跟进级别",
+    "Suburb",
     "详细地址",
-    "行业展示",
+    "行业",
+    "铺设优先级",
 ]
 
 ACTIVATION_INTERNAL_COLUMNS = [
@@ -107,19 +102,12 @@ ACTIVATION_INTERNAL_COLUMNS = [
 
 SILENT_PROVIDER_COLUMNS = [
     "商家名",
-    "国家",
-    "州/省",
     "所在城市",
-    "街区",
-    "邮编",
-    "地理展示名称",
     "NZ地理片区",
-    "沉默分层",
-    "接入时长",
-    "接入时间",
-    "业务类型",
+    "Suburb",
     "详细地址",
-    "MCC代码",
+    "行业",
+    "铺设优先级",
 ]
 
 SILENT_INTERNAL_COLUMNS = [
@@ -190,6 +178,23 @@ SILENT_COUNTRY_LABELS = {
     "NZ": "新西兰",
 }
 
+SERVICE_PROVIDER_PRIORITY_LABELS = {
+    "severe": "优先铺设",
+    "严重下滑": "优先铺设",
+    "new_unactivated_180d": "优先铺设",
+    "新接入180天未激活": "优先铺设",
+    "high": "重点铺设",
+    "明显下滑": "重点铺设",
+    "initial_silent": "重点铺设",
+    "初始沉默": "重点铺设",
+    "medium": "机会铺设",
+    "稍微下滑": "机会铺设",
+    "deep_silent": "机会铺设",
+    "深度沉默": "机会铺设",
+    "stable": "",
+    "稳定": "",
+}
+
 
 def csv_bytes(df: pd.DataFrame) -> bytes:
     return df.to_csv(index=False).encode("utf-8-sig")
@@ -233,20 +238,15 @@ def activation_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
     payload = pd.DataFrame(
         {
             "商家名": _first_text(rows, ["merchant_name", "merchant_short_name"]),
-            "国家": _col(rows, "geo_country"),
-            "州/省": _col(rows, "geo_state"),
             "所在城市": _col(rows, "geo_city"),
-            "Suburb": _col(rows, "geo_suburb"),
-            "Postcode": _col(rows, "geo_postcode"),
-            "地理展示名称": _col(rows, "geo_reporting_name"),
             "NZ地理片区": _col(rows, "nz_geo_area"),
-            "NZ Cluster": _col(rows, "nz_business_cluster"),
-            "服务商跟进级别": _first_text(rows, ["priority_label", "decay_band"]),
+            "Suburb": _col(rows, "geo_suburb"),
             "详细地址": _first_text(rows, ["address", "normalized_address"]),
-            "行业展示": _first_text(rows, ["mcc_major_industry", "mcc_industry", "mcc_name", "mcc"]),
+            "行业": _first_text(rows, ["mcc_major_industry", "mcc_industry", "mcc_name", "mcc"]),
+            "铺设优先级": _service_provider_priority(_first_text(rows, ["priority_label", "decay_band"])),
         }
     )
-    return _select_nonempty(payload, ACTIVATION_PROVIDER_COLUMNS)
+    return payload[ACTIVATION_PROVIDER_COLUMNS]
 
 
 def activation_internal_export(rows: pd.DataFrame) -> pd.DataFrame:
@@ -265,22 +265,15 @@ def silent_merchants_provider_export(rows: pd.DataFrame) -> pd.DataFrame:
     payload = pd.DataFrame(
         {
             "商家名": _first_text(rows, ["merchant_display_name", "merchant_short_name", "merchant_company_name"]),
-            "国家": _map_values(_col(rows, "geo_country"), SILENT_COUNTRY_LABELS),
-            "州/省": _col(rows, "geo_state"),
             "所在城市": _col(rows, "geo_city"),
-            "街区": _col(rows, "geo_suburb"),
-            "邮编": _col(rows, "geo_postcode"),
-            "地理展示名称": _col(rows, "geo_reporting_name"),
             "NZ地理片区": _col(rows, "nz_geo_area"),
-            "沉默分层": _map_values(_col(rows, "silence_tier"), SILENT_TIER_LABELS),
-            "接入时长": _map_values(_col(rows, "access_age_band"), SILENT_ACCESS_AGE_LABELS),
-            "接入时间": _col(rows, "merchant_access_time"),
-            "业务类型": _map_values(_col(rows, "business_type"), SILENT_BUSINESS_TYPE_LABELS),
+            "Suburb": _col(rows, "geo_suburb"),
             "详细地址": _first_text(rows, ["address", "stores_address"]),
-            "MCC代码": _col(rows, "mcc_code"),
+            "行业": _first_text(rows, ["mcc_major_industry", "mcc_industry", "mcc_name", "mcc", "mcc_code"]),
+            "铺设优先级": _service_provider_priority(_col(rows, "silence_tier")),
         }
     )
-    return _select_nonempty(payload, SILENT_PROVIDER_COLUMNS)
+    return payload[SILENT_PROVIDER_COLUMNS]
 
 
 def silent_merchants_internal_export(rows: pd.DataFrame) -> pd.DataFrame:
@@ -311,6 +304,10 @@ def _active_label(values: pd.Series) -> pd.Series:
 
 def _map_values(values: pd.Series, mapping: dict[str, str]) -> pd.Series:
     return values.astype(str).map(lambda value: mapping.get(value, value))
+
+
+def _service_provider_priority(values: pd.Series) -> pd.Series:
+    return _map_values(values, SERVICE_PROVIDER_PRIORITY_LABELS)
 
 
 def _select_existing(df: pd.DataFrame, columns: list[str], *, drop_empty: bool = False) -> pd.DataFrame:

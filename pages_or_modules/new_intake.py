@@ -15,7 +15,19 @@ from charts import (
     treemap_option,
 )
 from exports import csv_bytes, new_intake_internal_export, new_intake_provider_export
-from filters import apply_text_filter, disabled_multiselect_filter, ka_scope_filter, mapped_multiselect_filter, multiselect_filter, options
+from filters import (
+    KA_SCOPE_ALL,
+    KA_SCOPE_EXCLUDE,
+    KA_SCOPE_ONLY,
+    apply_in_filter,
+    apply_ka_scope,
+    apply_text_filter,
+    disabled_multiselect_filter,
+    ka_scope_filter,
+    mapped_multiselect_filter,
+    multiselect_filter,
+    options,
+)
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
 from metrics import count_flag, format_int, format_pct, rate, sum_number
 from ui_labels import CHANNEL_LABELS, COUNTRY_LABELS, display_table, label_value
@@ -28,11 +40,18 @@ ONLINE_SCOPE_ONLY = "只看线上"
 
 
 def render_new_intake_page(data: dict[str, object]) -> None:
-    rows = with_reporting_geography(
-        data["rows"].copy(),  # type: ignore[index, union-attr]
-        country_columns=["analysis_country", "country_group", "merchant_country_code"],
-    )
-    if rows.empty:
+    query = data.get("query")
+    if query is not None:
+        base_rows = with_reporting_geography(
+            query.filter_frame().copy(),  # type: ignore[union-attr]
+            country_columns=["analysis_country", "country_group", "merchant_country_code"],
+        )
+    else:
+        base_rows = with_reporting_geography(
+            data["rows"].copy(),  # type: ignore[index, union-attr]
+            country_columns=["analysis_country", "country_group", "merchant_country_code"],
+        )
+    if base_rows.empty:
         st.warning("没有可用的新进件数据。")
         return
 
@@ -45,7 +64,10 @@ def render_new_intake_page(data: dict[str, object]) -> None:
         "默认视图：最近 6 个进件月，已排除圳兴商户和线上商户；如需查看完整口径，可在左侧筛选器调整。"
     )
 
-    filtered = _sidebar_filters(rows)
+    if query is not None:
+        filtered = _sidebar_filters_query(query)  # type: ignore[arg-type]
+    else:
+        filtered = _sidebar_filters(base_rows)
     filtered = _normalize_numeric(filtered)
 
     total = len(filtered)
@@ -189,7 +211,7 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
 
     selected_country = mapped_multiselect_filter("国家", filtered, "geo_country", key="ni_country", value_map=COUNTRY_LABELS)
     if selected_country:
-        filtered = filtered[filtered["geo_country"].astype(str).isin(selected_country)]
+        filtered = apply_in_filter(filtered, "geo_country", selected_country)
 
     filtered = ka_scope_filter(filtered, key="ni_ka_scope")
 
@@ -224,7 +246,7 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
         else:
             selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
-            filtered = filtered[filtered[column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, column, selected)
 
     status = st.sidebar.selectbox("接入后30天激活状态", ("全部", "已激活", "未激活"), key="ni_active")
     if status == "已激活":
@@ -249,13 +271,92 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _sidebar_filters_query(query: object) -> pd.DataFrame:
+    st.sidebar.subheader("新进件筛选")
+    st.sidebar.caption("默认：最近 6 个进件月，排除圳兴商户和线上商户。")
+    filtered = with_reporting_geography(
+        query.filter_frame().copy(),  # type: ignore[attr-defined]
+        country_columns=["analysis_country", "country_group", "merchant_country_code"],
+    )
+    criteria: dict[str, object] = {"in_filters": {}}
+
+    months = _month_options(filtered)
+    if months:
+        default_start, default_end = _default_month_range(months)
+        start, end = st.sidebar.select_slider(
+            "进件月份范围",
+            options=months,
+            value=(default_start, default_end),
+            key="ni_month_range_recent6_v2",
+            help="默认使用数据中最新的 6 个进件月。",
+        )
+        criteria["month_range"] = [str(start), str(end)]
+        filtered = _filter_month_range(filtered, start, end)
+
+    selected_country = mapped_multiselect_filter("国家", filtered, "geo_country", key="ni_country", value_map=COUNTRY_LABELS)
+    filtered = _apply_query_in_filter(filtered, criteria, "geo_country", selected_country)
+
+    ka_scope = st.sidebar.selectbox(
+        "KA/SMB范围",
+        (KA_SCOPE_ALL, KA_SCOPE_ONLY, KA_SCOPE_EXCLUDE),
+        key="ni_ka_scope",
+        help="KA 来自共享 KA MID 维表；剔除 KA 后即为 SMB/非 KA 商户。",
+    )
+    criteria["ka_scope"] = _ka_scope_mode(ka_scope)
+    filtered = apply_ka_scope(filtered, ka_scope)
+
+    filtered = _apply_geo_filters_query(filtered, criteria)
+
+    zhenxing = st.sidebar.selectbox(
+        "圳兴商户",
+        ("全部", "只看圳兴", "排除圳兴"),
+        index=2,
+        key="ni_zhenxing_default_exclude",
+        help="默认从新进件工作视图中排除圳兴商户。",
+    )
+    criteria["zhenxing_scope"] = _zhenxing_scope_mode(zhenxing)
+    if "is_zhenxing" in filtered.columns:
+        filtered = _apply_zhenxing_scope(filtered, zhenxing)
+
+    online_scope = st.sidebar.selectbox(
+        "线上渠道",
+        (ONLINE_SCOPE_EXCLUDE, ONLINE_SCOPE_ALL, ONLINE_SCOPE_ONLY),
+        index=0,
+        key="ni_online_scope_default_exclude",
+        help="默认排除线上商户。切换到全部渠道可纳入线上商户。",
+    )
+    criteria["online_scope"] = _online_scope_mode(online_scope)
+    filtered = _apply_online_scope(filtered, online_scope)
+
+    for label, column, key in (
+        ("机构", "institution_standard", "ni_institution"),
+        ("渠道", "channel_type", "ni_channel_scope"),
+        ("行业", "mcc_major_industry", "ni_industry"),
+    ):
+        if column == "channel_type":
+            selected = mapped_multiselect_filter(label, filtered, column, key=key, value_map=CHANNEL_LABELS)
+        else:
+            selected = multiselect_filter(label, filtered, column, key=key)
+        filtered = _apply_query_in_filter(filtered, criteria, column, selected)
+
+    status = st.sidebar.selectbox("接入后30天激活状态", ("全部", "已激活", "未激活"), key="ni_active")
+    criteria["active_status"] = _active_status_mode(status)
+    if status == "已激活":
+        filtered = filtered[filtered["active_30d_flag"].astype(str) == "1"]
+    elif status == "未激活":
+        filtered = filtered[filtered["active_30d_flag"].astype(str) == "0"]
+
+    criteria["text_query"] = st.sidebar.text_input("商户/机构关键词", key="ni_query")
+    return query.rows(criteria)  # type: ignore[attr-defined]
+
+
 def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
     scope = country_scope(df)
     if scope == "NZ":
         return _apply_nz_geo_filters(df)
     if scope == "MIXED":
         selected_city = multiselect_filter("城市", df, "geo_city", key="ni_geo_city")
-        filtered = df[df["geo_city"].astype(str).isin(selected_city)] if selected_city else df
+        filtered = apply_in_filter(df, "geo_city", selected_city) if selected_city else df
         if selected_city and country_scope(filtered) == "NZ":
             return _apply_nz_geo_filters(filtered, selected_city=selected_city)
         if selected_city and country_scope(filtered) == "AU":
@@ -264,12 +365,27 @@ def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
     return _apply_standard_geo_filters(df)
 
 
+def _apply_geo_filters_query(df: pd.DataFrame, criteria: dict[str, object]) -> pd.DataFrame:
+    scope = country_scope(df)
+    if scope == "NZ":
+        return _apply_nz_geo_filters_query(df, criteria)
+    if scope == "MIXED":
+        selected_city = multiselect_filter("城市", df, "geo_city", key="ni_geo_city")
+        filtered = _apply_query_in_filter(df, criteria, "geo_city", selected_city)
+        if selected_city and country_scope(filtered) == "NZ":
+            return _apply_nz_geo_filters_query(filtered, criteria, selected_city=selected_city)
+        if selected_city and country_scope(filtered) == "AU":
+            return _apply_standard_geo_filters_query(filtered, criteria, skip_columns={"geo_city"})
+        return filtered
+    return _apply_standard_geo_filters_query(df, criteria)
+
+
 def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None = None) -> pd.DataFrame:
     filtered = df
     if selected_city is None:
         selected_city = multiselect_filter("城市", filtered, "geo_city", key="ni_geo_city")
         if selected_city:
-            filtered = filtered[filtered["geo_city"].astype(str).isin(selected_city)]
+            filtered = apply_in_filter(filtered, "geo_city", selected_city)
 
     area_key = "ni_nz_geo_area"
     if not selected_city:
@@ -287,7 +403,7 @@ def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None =
     else:
         selected_area = multiselect_filter("NZ 地理片区", filtered, "nz_geo_area", key=area_key)
         if selected_area:
-            filtered = filtered[filtered["nz_geo_area"].astype(str).isin(selected_area)]
+            filtered = apply_in_filter(filtered, "nz_geo_area", selected_area)
 
     for label, column, key in (
         ("NZ 商圈集群", "nz_business_cluster", "ni_nz_cluster"),
@@ -295,7 +411,44 @@ def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None =
     ):
         selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
-            filtered = filtered[filtered[column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, column, selected)
+    return filtered
+
+
+def _apply_nz_geo_filters_query(
+    df: pd.DataFrame,
+    criteria: dict[str, object],
+    *,
+    selected_city: list[str] | None = None,
+) -> pd.DataFrame:
+    filtered = df
+    if selected_city is None:
+        selected_city = multiselect_filter("城市", filtered, "geo_city", key="ni_geo_city")
+        filtered = _apply_query_in_filter(filtered, criteria, "geo_city", selected_city)
+
+    area_key = "ni_nz_geo_area"
+    if not selected_city:
+        disabled_multiselect_filter(
+            "NZ 地理片区",
+            key=area_key,
+            help_text="请先选择城市，之后才能选择 NZ 地理片区。",
+        )
+    elif not options(filtered, "nz_geo_area"):
+        disabled_multiselect_filter(
+            "NZ 地理片区",
+            key=area_key,
+            help_text="所选城市暂无已审核的 NZ 地理片区。",
+        )
+    else:
+        selected_area = multiselect_filter("NZ 地理片区", filtered, "nz_geo_area", key=area_key)
+        filtered = _apply_query_in_filter(filtered, criteria, "nz_geo_area", selected_area)
+
+    for label, column, key in (
+        ("NZ 商圈集群", "nz_business_cluster", "ni_nz_cluster"),
+        ("街区", "geo_suburb", "ni_geo_suburb"),
+    ):
+        selected = multiselect_filter(label, filtered, column, key=key)
+        filtered = _apply_query_in_filter(filtered, criteria, column, selected)
     return filtered
 
 
@@ -307,8 +460,70 @@ def _apply_standard_geo_filters(df: pd.DataFrame, *, skip_columns: set[str] | No
             continue
         selected = multiselect_filter(spec.label, filtered, spec.column, key=f"ni_{spec.key_suffix}")
         if selected:
-            filtered = filtered[filtered[spec.column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, spec.column, selected)
     return filtered
+
+
+def _apply_standard_geo_filters_query(
+    df: pd.DataFrame,
+    criteria: dict[str, object],
+    *,
+    skip_columns: set[str] | None = None,
+) -> pd.DataFrame:
+    filtered = df
+    skip_columns = skip_columns or set()
+    for spec in sidebar_geo_filter_specs(country_scope(filtered)):
+        if spec.column in skip_columns:
+            continue
+        selected = multiselect_filter(spec.label, filtered, spec.column, key=f"ni_{spec.key_suffix}")
+        filtered = _apply_query_in_filter(filtered, criteria, spec.column, selected)
+    return filtered
+
+
+def _apply_query_in_filter(
+    df: pd.DataFrame,
+    criteria: dict[str, object],
+    column: str,
+    selected: list[str],
+) -> pd.DataFrame:
+    if not selected:
+        return df
+    in_filters = criteria.setdefault("in_filters", {})
+    if isinstance(in_filters, dict):
+        in_filters[column] = [str(value) for value in selected]
+    return apply_in_filter(df, column, selected)
+
+
+def _ka_scope_mode(scope: str) -> str:
+    if scope == KA_SCOPE_ONLY:
+        return "only"
+    if scope == KA_SCOPE_EXCLUDE:
+        return "exclude"
+    return "all"
+
+
+def _zhenxing_scope_mode(scope: str) -> str:
+    if scope == "只看圳兴":
+        return "only"
+    if scope == "排除圳兴":
+        return "exclude"
+    return "all"
+
+
+def _online_scope_mode(scope: str) -> str:
+    if scope == ONLINE_SCOPE_ONLY:
+        return "only"
+    if scope == ONLINE_SCOPE_EXCLUDE:
+        return "exclude"
+    return "all"
+
+
+def _active_status_mode(status: str) -> str:
+    if status == "已激活":
+        return "active"
+    if status == "未激活":
+        return "inactive"
+    return "all"
 
 
 def _normalize_numeric(df: pd.DataFrame) -> pd.DataFrame:
@@ -390,11 +605,13 @@ def _apply_online_scope(df: pd.DataFrame, scope: str) -> pd.DataFrame:
 def _apply_zhenxing_scope(df: pd.DataFrame, scope: str) -> pd.DataFrame:
     if "is_zhenxing" not in df.columns:
         return df
-    values = df["is_zhenxing"].fillna("").astype(str)
+    text = df["is_zhenxing"].fillna("").astype(str).str.strip()
+    numeric = pd.to_numeric(text, errors="coerce")
+    is_zhenxing = text.eq("1") | numeric.eq(1)
     if scope == "只看圳兴":
-        return df[values == "1"]
+        return df[is_zhenxing]
     if scope == "排除圳兴":
-        return df[values == "0"]
+        return df[~is_zhenxing]
     return df
 
 

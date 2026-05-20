@@ -26,7 +26,14 @@ from exports import (
     silent_merchants_internal_export,
     silent_merchants_provider_export,
 )
-from filters import apply_text_filter, disabled_multiselect_filter, mapped_multiselect_filter, multiselect_filter, options
+from filters import (
+    apply_in_filter,
+    apply_text_filter,
+    disabled_multiselect_filter,
+    mapped_multiselect_filter,
+    multiselect_filter,
+    options,
+)
 from geography import GeoFilterSpec, country_scope, with_reporting_geography
 from metrics import format_int, format_pct, rate
 
@@ -47,7 +54,11 @@ class DateRange:
 
 
 def render_silent_merchants_page(data: dict[str, object]) -> None:
-    rows = _prepare_rows(data["rows"].copy())  # type: ignore[index, union-attr]
+    query = data.get("query")
+    if query is not None:
+        rows = _prepare_rows(query.filter_frame().copy())  # type: ignore[union-attr]
+    else:
+        rows = _prepare_rows(data["rows"].copy())  # type: ignore[index, union-attr]
     summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
     if rows.empty:
         st.warning("没有可用的沉默商户数据。")
@@ -60,7 +71,10 @@ def render_silent_merchants_page(data: dict[str, object]) -> None:
     )
     _sample_notice(summary, rows)
 
-    filtered = _sidebar_filters(rows)
+    if query is not None:
+        filtered = _sidebar_filters_query(query, rows)  # type: ignore[arg-type]
+    else:
+        filtered = _sidebar_filters(rows)
     total = len(filtered)
     new_unactivated = _tier_count(filtered, "new_unactivated_180d")
     initial_silent = _tier_count(filtered, "initial_silent")
@@ -221,7 +235,7 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
         "国家", filtered, "geo_country", key="silent_country", value_map=SILENT_COUNTRY_LABELS
     )
     if selected_country:
-        filtered = filtered[filtered["geo_country"].astype(str).isin(selected_country)]
+        filtered = apply_in_filter(filtered, "geo_country", selected_country)
 
     filtered = _apply_geo_filters(filtered)
 
@@ -229,19 +243,19 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
         "沉默分层", filtered, "silence_tier", key="silent_tier", value_map=SILENT_TIER_LABELS
     )
     if selected_tier:
-        filtered = filtered[filtered["silence_tier"].astype(str).isin(selected_tier)]
+        filtered = apply_in_filter(filtered, "silence_tier", selected_tier)
 
     selected_age = mapped_multiselect_filter(
         "接入时长", filtered, "access_age_band", key="silent_age", value_map=SILENT_ACCESS_AGE_LABELS
     )
     if selected_age:
-        filtered = filtered[filtered["access_age_band"].astype(str).isin(selected_age)]
+        filtered = apply_in_filter(filtered, "access_age_band", selected_age)
 
     selected_business_type = mapped_multiselect_filter(
         "业务类型", filtered, "business_type", key="silent_business_type", value_map=SILENT_BUSINESS_TYPE_LABELS
     )
     if selected_business_type:
-        filtered = filtered[filtered["business_type"].astype(str).isin(selected_business_type)]
+        filtered = apply_in_filter(filtered, "business_type", selected_business_type)
 
     for label, column, key in (
         ("机构分组", "institution_group", "silent_institution_group"),
@@ -250,7 +264,7 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     ):
         selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
-            filtered = filtered[filtered[column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, column, selected)
 
     address_scope = st.sidebar.selectbox("地址可用性", list(ADDRESS_SCOPE_LABELS), key="silent_address_scope")
     filtered = _filter_address_scope(filtered, ADDRESS_SCOPE_LABELS[address_scope])
@@ -289,13 +303,70 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _sidebar_filters_query(query: object, option_rows: pd.DataFrame) -> pd.DataFrame:
+    st.sidebar.subheader("沉默商户筛选")
+    filtered = option_rows
+    criteria: dict[str, object] = {"in_filters": {}, "residual_in_filters": {}}
+
+    selected_country = mapped_multiselect_filter(
+        "国家", filtered, "geo_country", key="silent_country", value_map=SILENT_COUNTRY_LABELS
+    )
+    filtered = _apply_query_in_filter(filtered, criteria, "geo_country", selected_country)
+
+    filtered = _apply_geo_filters_query(filtered, criteria)
+
+    selected_tier = mapped_multiselect_filter(
+        "沉默分层", filtered, "silence_tier", key="silent_tier", value_map=SILENT_TIER_LABELS
+    )
+    filtered = _apply_query_in_filter(filtered, criteria, "silence_tier", selected_tier)
+
+    selected_age = mapped_multiselect_filter(
+        "接入时长", filtered, "access_age_band", key="silent_age", value_map=SILENT_ACCESS_AGE_LABELS
+    )
+    filtered = _apply_query_in_filter(filtered, criteria, "access_age_band", selected_age)
+
+    selected_business_type = mapped_multiselect_filter(
+        "业务类型", filtered, "business_type", key="silent_business_type", value_map=SILENT_BUSINESS_TYPE_LABELS
+    )
+    filtered = _apply_query_in_filter(filtered, criteria, "business_type", selected_business_type)
+
+    for label, column, key in (
+        ("机构分组", "institution_group", "silent_institution_group"),
+        ("机构", "institution_name", "silent_institution"),
+        ("MCC代码", "mcc_code", "silent_mcc_code"),
+    ):
+        selected = multiselect_filter(label, filtered, column, key=key)
+        filtered = _apply_query_in_filter(filtered, criteria, column, selected)
+
+    address_scope = st.sidebar.selectbox("地址可用性", list(ADDRESS_SCOPE_LABELS), key="silent_address_scope")
+    criteria["address_scope"] = ADDRESS_SCOPE_LABELS[address_scope]
+    filtered = _filter_address_scope(filtered, ADDRESS_SCOPE_LABELS[address_scope])
+
+    bounds = _access_date_bounds(filtered)
+    if bounds:
+        value = st.sidebar.date_input(
+            "接入日期范围",
+            value=(bounds.start, bounds.end),
+            min_value=bounds.start,
+            max_value=bounds.end,
+            key="silent_access_date_range",
+        )
+        if isinstance(value, tuple) and len(value) == 2:
+            criteria["access_date_range"] = [value[0].isoformat(), value[1].isoformat()]
+            filtered = _filter_access_date_range(filtered, value[0], value[1])
+
+    criteria["text_query"] = st.sidebar.text_input("商户/机构/区域/ID关键词", key="silent_query")
+    rows = _prepare_rows(query.rows(criteria))  # type: ignore[attr-defined]
+    return _apply_silent_residual_filters(rows, criteria)
+
+
 def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
     scope = country_scope(df)
     if scope == "NZ":
         return _apply_nz_geo_filters(df)
     if scope == "MIXED":
         selected_city = multiselect_filter("城市", df, "geo_city", key="silent_geo_city")
-        filtered = df[df["geo_city"].astype(str).isin(selected_city)] if selected_city else df
+        filtered = apply_in_filter(df, "geo_city", selected_city) if selected_city else df
         if selected_city and country_scope(filtered) == "NZ":
             return _apply_nz_geo_filters(filtered, selected_city=selected_city)
         if selected_city and country_scope(filtered) == "AU":
@@ -304,12 +375,27 @@ def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
     return _apply_standard_geo_filters(df)
 
 
+def _apply_geo_filters_query(df: pd.DataFrame, criteria: dict[str, object]) -> pd.DataFrame:
+    scope = country_scope(df)
+    if scope == "NZ":
+        return _apply_nz_geo_filters_query(df, criteria)
+    if scope == "MIXED":
+        selected_city = multiselect_filter("城市", df, "geo_city", key="silent_geo_city")
+        filtered = _apply_query_in_filter(df, criteria, "geo_city", selected_city)
+        if selected_city and country_scope(filtered) == "NZ":
+            return _apply_nz_geo_filters_query(filtered, criteria, selected_city=selected_city)
+        if selected_city and country_scope(filtered) == "AU":
+            return _apply_standard_geo_filters_query(filtered, criteria, skip_columns={"geo_city"})
+        return filtered
+    return _apply_standard_geo_filters_query(df, criteria)
+
+
 def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None = None) -> pd.DataFrame:
     filtered = df
     if selected_city is None:
         selected_city = multiselect_filter("城市", filtered, "geo_city", key="silent_geo_city")
         if selected_city:
-            filtered = filtered[filtered["geo_city"].astype(str).isin(selected_city)]
+            filtered = apply_in_filter(filtered, "geo_city", selected_city)
 
     area_key = "silent_nz_geo_area"
     if not selected_city:
@@ -327,7 +413,7 @@ def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None =
     else:
         selected_area = multiselect_filter("NZ 地理片区", filtered, "nz_geo_area", key=area_key)
         if selected_area:
-            filtered = filtered[filtered["nz_geo_area"].astype(str).isin(selected_area)]
+            filtered = apply_in_filter(filtered, "nz_geo_area", selected_area)
 
     for label, column, key in (
         ("NZ 商圈集群", "nz_business_cluster", "silent_nz_cluster"),
@@ -335,7 +421,44 @@ def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None =
     ):
         selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
-            filtered = filtered[filtered[column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, column, selected)
+    return filtered
+
+
+def _apply_nz_geo_filters_query(
+    df: pd.DataFrame,
+    criteria: dict[str, object],
+    *,
+    selected_city: list[str] | None = None,
+) -> pd.DataFrame:
+    filtered = df
+    if selected_city is None:
+        selected_city = multiselect_filter("城市", filtered, "geo_city", key="silent_geo_city")
+        filtered = _apply_query_in_filter(filtered, criteria, "geo_city", selected_city)
+
+    area_key = "silent_nz_geo_area"
+    if not selected_city:
+        disabled_multiselect_filter(
+            "NZ 地理片区",
+            key=area_key,
+            help_text="请先选择城市，之后才能选择 NZ 地理片区。",
+        )
+    elif not options(filtered, "nz_geo_area"):
+        disabled_multiselect_filter(
+            "NZ 地理片区",
+            key=area_key,
+            help_text="所选城市暂无已审核的 NZ 地理片区。",
+        )
+    else:
+        selected_area = multiselect_filter("NZ 地理片区", filtered, "nz_geo_area", key=area_key)
+        filtered = _apply_query_in_filter(filtered, criteria, "nz_geo_area", selected_area)
+
+    for label, column, key in (
+        ("NZ 商圈集群", "nz_business_cluster", "silent_nz_cluster"),
+        ("街区", "geo_suburb", "silent_geo_suburb"),
+    ):
+        selected = multiselect_filter(label, filtered, column, key=key)
+        filtered = _apply_query_in_filter(filtered, criteria, column, selected)
     return filtered
 
 
@@ -347,8 +470,76 @@ def _apply_standard_geo_filters(df: pd.DataFrame, *, skip_columns: set[str] | No
             continue
         selected = multiselect_filter(spec.label, filtered, spec.column, key=f"silent_{spec.key_suffix}")
         if selected:
-            filtered = filtered[filtered[spec.column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, spec.column, selected)
     return filtered
+
+
+def _apply_standard_geo_filters_query(
+    df: pd.DataFrame,
+    criteria: dict[str, object],
+    *,
+    skip_columns: set[str] | None = None,
+) -> pd.DataFrame:
+    filtered = df
+    skip_columns = skip_columns or set()
+    for spec in _geo_filter_specs(country_scope(filtered)):
+        if spec.column in skip_columns:
+            continue
+        selected = multiselect_filter(spec.label, filtered, spec.column, key=f"silent_{spec.key_suffix}")
+        filtered = _apply_query_in_filter(filtered, criteria, spec.column, selected)
+    return filtered
+
+
+def _apply_query_in_filter(
+    df: pd.DataFrame,
+    criteria: dict[str, object],
+    column: str,
+    selected: list[str],
+) -> pd.DataFrame:
+    if not selected:
+        return df
+    filters = criteria.setdefault("in_filters", {})
+    if isinstance(filters, dict):
+        filters[column] = [str(value) for value in selected]
+    return apply_in_filter(df, column, selected)
+
+
+def _apply_silent_residual_filters(df: pd.DataFrame, criteria: dict[str, object]) -> pd.DataFrame:
+    filtered = df
+    filters = criteria.get("in_filters") if isinstance(criteria.get("in_filters"), dict) else {}
+    for column, selected in filters.items():
+        if isinstance(selected, list):
+            filtered = apply_in_filter(filtered, column, selected)
+
+    address_scope = str(criteria.get("address_scope") or "all")
+    filtered = _filter_address_scope(filtered, address_scope)
+
+    access_date_range = criteria.get("access_date_range")
+    if isinstance(access_date_range, list) and len(access_date_range) == 2:
+        start = pd.to_datetime(access_date_range[0], errors="coerce")
+        end = pd.to_datetime(access_date_range[1], errors="coerce")
+        if pd.notna(start) and pd.notna(end):
+            filtered = _filter_access_date_range(filtered, start.date(), end.date())
+
+    return apply_text_filter(
+        filtered,
+        [
+            "merchant_id",
+            "merchant_display_name",
+            "merchant_company_name",
+            "merchant_short_name",
+            "institution_id",
+            "institution_name",
+            "institution_group",
+            "geo_reporting_name",
+            "geo_city",
+            "geo_suburb",
+            "address",
+            "stores_address",
+            "mcc_code",
+        ],
+        str(criteria.get("text_query") or ""),
+    )
 
 
 def _geo_filter_specs(scope: str) -> list[GeoFilterSpec]:

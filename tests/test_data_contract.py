@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 from datetime import date
+from io import BytesIO
 import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,12 +33,15 @@ import data_loader
 from data_loader import (
     DataLoadError,
     _append_ka_segment,
+    _github_response_bytes,
+    _load_frame,
     _normalize_amount_units,
     _read_csv_text,
     validate_page_dataset,
     validate_project,
     validate_project_metadata,
 )
+from data_io import duckdb_filter_frame, read_table_bytes
 from exports import (
     activation_internal_export,
     activation_provider_export,
@@ -46,7 +52,7 @@ from exports import (
 )
 from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
-from filters import KA_SCOPE_EXCLUDE, KA_SCOPE_ONLY, apply_ka_scope
+from filters import KA_SCOPE_EXCLUDE, KA_SCOPE_ONLY, apply_in_filter, apply_ka_scope, apply_text_filter
 from pages_or_modules.new_intake import (
     ONLINE_SCOPE_EXCLUDE,
     _apply_online_scope,
@@ -522,7 +528,19 @@ def test_activation_provider_export_excludes_internal_ids() -> None:
     assert "candidate_rank" not in provider.columns
     assert "地理展示层级" not in provider.columns
     assert "州/省" not in provider.columns
-    assert "服务商跟进级别" in provider.columns
+    assert "服务商跟进级别" not in provider.columns
+    assert provider.columns.tolist() == [
+        "商家名",
+        "所在城市",
+        "NZ地理片区",
+        "Suburb",
+        "详细地址",
+        "行业",
+        "铺设优先级",
+    ]
+    assert provider.loc[0, "详细地址"] == "Demo address"
+    assert provider.loc[0, "行业"] == "餐饮类"
+    assert provider.loc[0, "铺设优先级"] == "优先铺设"
     assert "geo_reporting_level" not in internal.columns
     assert "geo_reporting_level_label" not in internal.columns
     assert "merchant_id" in internal.columns
@@ -567,7 +585,9 @@ def test_activation_provider_export_keeps_mixed_country_specific_columns() -> No
                 "business_city": "Auckland",
                 "business_suburb": "CBD",
                 "geo_area": "Auckland Central",
-                "priority_label": "严重下滑",
+                "decay_band": "severe",
+                "normalized_address": "NZ fallback address",
+                "mcc_name": "Restaurant",
             },
             {
                 "merchant_id": "au",
@@ -576,7 +596,20 @@ def test_activation_provider_export_keeps_mixed_country_specific_columns() -> No
                 "state": "NSW",
                 "business_city": "Sydney",
                 "business_suburb": "Haymarket",
-                "priority_label": "明显下滑",
+                "decay_band": "high",
+                "address": "AU address",
+                "mcc_industry": "Retail",
+            },
+            {
+                "merchant_id": "nz-medium",
+                "merchant_name": "NZ Medium Merchant",
+                "scope_country": "NZ",
+                "business_city": "Wellington",
+                "business_suburb": "Te Aro",
+                "geo_area": "Wellington Central",
+                "decay_band": "medium",
+                "address": "NZ medium address",
+                "mcc": "5812",
             },
         ]
     )
@@ -584,10 +617,22 @@ def test_activation_provider_export_keeps_mixed_country_specific_columns() -> No
     provider = activation_provider_export(rows)
 
     assert "地理展示层级" not in provider.columns
-    assert "州/省" in provider.columns
+    assert "州/省" not in provider.columns
     assert "NZ地理片区" in provider.columns
+    assert provider.columns.tolist() == [
+        "商家名",
+        "所在城市",
+        "NZ地理片区",
+        "Suburb",
+        "详细地址",
+        "行业",
+        "铺设优先级",
+    ]
     assert provider.loc[0, "NZ地理片区"] == "Auckland Central"
-    assert provider.loc[1, "州/省"] == "NSW"
+    assert provider.loc[1, "NZ地理片区"] == ""
+    assert provider["铺设优先级"].tolist() == ["优先铺设", "重点铺设", "机会铺设"]
+    assert provider["详细地址"].tolist() == ["NZ fallback address", "AU address", "NZ medium address"]
+    assert provider["行业"].tolist() == ["Restaurant", "Retail", "5812"]
 
 
 def test_silent_provider_export_excludes_internal_ids_and_uses_chinese_headers() -> None:
@@ -610,7 +655,31 @@ def test_silent_provider_export_excludes_internal_ids_and_uses_chinese_headers()
                 "business_type": "OFFLINE",
                 "address": "Unit 902/108 Queens Rd",
                 "mcc_code": "0744",
-            }
+            },
+            {
+                "merchant_id": "823448012",
+                "merchant_display_name": "Initial Silent Merchant",
+                "country_group": "NZ",
+                "merchant_country_code": "554",
+                "business_city": "Auckland",
+                "business_suburb": "CBD",
+                "geo_area": "Auckland Central",
+                "silence_tier": "initial_silent",
+                "stores_address": "1 Queen Street",
+                "mcc_name": "Restaurant",
+            },
+            {
+                "merchant_id": "823448013",
+                "merchant_display_name": "Deep Silent Merchant",
+                "country_group": "NZ",
+                "merchant_country_code": "554",
+                "business_city": "Wellington",
+                "business_suburb": "Te Aro",
+                "geo_area": "Wellington Central",
+                "silence_tier": "deep_silent",
+                "address": "2 Cuba Street",
+                "mcc_major_industry": "餐饮类",
+            },
         ]
     )
 
@@ -621,23 +690,17 @@ def test_silent_provider_export_excludes_internal_ids_and_uses_chinese_headers()
     assert "institution_id" not in provider.columns
     assert provider.columns.tolist() == [
         "商家名",
-        "国家",
-        "州/省",
         "所在城市",
-        "街区",
-        "邮编",
-        "地理展示名称",
-        "沉默分层",
-        "接入时长",
-        "接入时间",
-        "业务类型",
+        "NZ地理片区",
+        "Suburb",
         "详细地址",
-        "MCC代码",
+        "行业",
+        "铺设优先级",
     ]
-    assert provider.loc[0, "国家"] == "澳大利亚"
-    assert provider.loc[0, "沉默分层"] == "新接入180天未激活"
-    assert provider.loc[0, "接入时长"] == "接入180-359天"
-    assert provider.loc[0, "业务类型"] == "线下"
+    assert "服务商跟进级别" not in provider.columns
+    assert provider["详细地址"].tolist() == ["Unit 902/108 Queens Rd", "1 Queen Street", "2 Cuba Street"]
+    assert provider["行业"].tolist() == ["0744", "Restaurant", "餐饮类"]
+    assert provider["铺设优先级"].tolist() == ["优先铺设", "重点铺设", "机会铺设"]
     assert "merchant_id" in internal.columns
     assert "institution_id" in internal.columns
     assert internal.loc[0, "merchant_id"] == "823448011"
@@ -727,6 +790,67 @@ def test_silent_page_helpers_sort_filter_and_keep_country_aware_geo_specs() -> N
     ]
 
 
+def test_silent_query_rows_match_pandas_filters(tmp_path: Path) -> None:
+    root = tmp_path / "anz-bi-platform"
+    page_root = root / "processed" / "silent_merchants"
+    page_root.mkdir(parents=True)
+    rows = pd.DataFrame(
+        [
+            {
+                "merchant_id": "s1",
+                "merchant_display_name": "Silent Cafe",
+                "institution_name": "PSP A",
+                "country_group": "NZ",
+                "merchant_country_code": "554",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "silence_tier": "initial_silent",
+                "access_age_band": "access_180_359d",
+                "business_type": "OFFLINE",
+                "mcc_code": "5812",
+                "has_address_flag": 1,
+            },
+            {
+                "merchant_id": "s2",
+                "merchant_display_name": "Deep Silent",
+                "institution_name": "PSP B",
+                "country_group": "NZ",
+                "merchant_country_code": "554",
+                "geo_country": "NZ",
+                "geo_city": "Wellington",
+                "silence_tier": "deep_silent",
+                "access_age_band": "access_gte_360d",
+                "business_type": "BOTH",
+                "mcc_code": "5411",
+                "has_address_flag": 0,
+            },
+            {
+                "merchant_id": "s3",
+                "merchant_display_name": "AU Silent",
+                "institution_name": "PSP A",
+                "country_group": "AU",
+                "merchant_country_code": "036",
+                "geo_country": "AU",
+                "geo_city": "Sydney",
+                "silence_tier": "initial_silent",
+                "access_age_band": "access_180_359d",
+                "business_type": "OFFLINE",
+                "mcc_code": "5812",
+                "has_address_flag": 1,
+            },
+        ]
+    )
+    rows.to_parquet(page_root / "silent_merchants_rows.parquet", index=False)
+    source = data_loader.DataSource(backend="local", local_root=root, amount_unit="major")
+    query = data_loader.SilentMerchantsQuery(source, "test-version")
+
+    filtered = query.rows({"in_filters": {"geo_country": ["NZ"], "silence_tier": ["initial_silent"]}})
+    expected = apply_in_filter(with_reporting_geography(rows, country_columns=["country_group", "merchant_country_code"]), "geo_country", ["NZ"])
+    expected = apply_in_filter(expected, "silence_tier", ["initial_silent"])
+
+    assert filtered["merchant_id"].tolist() == expected["merchant_id"].tolist() == ["s1"]
+
+
 def test_amount_columns_are_scaled_from_minor_units() -> None:
     rows = pd.DataFrame(
         [
@@ -750,6 +874,116 @@ def test_amount_columns_are_scaled_from_minor_units() -> None:
 def test_csv_reader_preserves_intake_month_labels() -> None:
     rows = _read_csv_text("intake_month,txn_amount_30d\n2025.10,100\n")
     assert rows.loc[0, "intake_month"] == "2025.10"
+
+
+def test_local_table_loader_prefers_parquet_over_csv(tmp_path: Path) -> None:
+    root = tmp_path / "anz-bi-platform"
+    page_root = root / "processed" / "new_intake"
+    page_root.mkdir(parents=True)
+    pd.DataFrame([{"merchant_id": "csv", "intake_month": "2025.09"}]).to_csv(
+        page_root / "new_intake_rows.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    pd.DataFrame([{"merchant_id": "parquet", "intake_month": "2025.10"}]).to_parquet(
+        page_root / "new_intake_rows.parquet",
+        index=False,
+    )
+    source = data_loader.DataSource(backend="local", local_root=root, amount_unit="major")
+
+    rows = _load_frame(source, "processed/new_intake/new_intake_rows.csv")
+
+    assert rows["merchant_id"].tolist() == ["parquet"]
+    assert rows.loc[0, "intake_month"] == "2025.10"
+
+
+def test_local_table_loader_falls_back_to_csv(tmp_path: Path) -> None:
+    root = tmp_path / "anz-bi-platform"
+    page_root = root / "processed" / "new_intake"
+    page_root.mkdir(parents=True)
+    pd.DataFrame([{"merchant_id": "csv", "intake_month": "2025.10"}]).to_csv(
+        page_root / "new_intake_rows.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    source = data_loader.DataSource(backend="local", local_root=root, amount_unit="major")
+
+    rows = _load_frame(source, "processed/new_intake/new_intake_rows.csv")
+
+    assert rows["merchant_id"].tolist() == ["csv"]
+    assert rows.loc[0, "intake_month"] == "2025.10"
+
+
+def test_github_binary_response_can_read_parquet_bytes() -> None:
+    buffer = BytesIO()
+    pd.DataFrame([{"stock_id": "stv2-1", "country_group": "NZ"}]).to_parquet(buffer, index=False)
+
+    class FakeResponse:
+        headers = {"content-type": "application/json"}
+
+        @staticmethod
+        def json() -> dict[str, str]:
+            return {"content": base64.b64encode(buffer.getvalue()).decode("ascii")}
+
+    source = data_loader.DataSource(backend="github_private", github_token="token")
+    payload = _github_response_bytes(source, FakeResponse(), "processed/rate_coupon_activity/rate_coupon_monthly.parquet")
+
+    rows = read_table_bytes(payload, relative_path="processed/rate_coupon_activity/rate_coupon_monthly.parquet")
+
+    assert rows["stock_id"].tolist() == ["stv2-1"]
+    assert rows["country_group"].tolist() == ["NZ"]
+
+
+def test_duckdb_filter_frame_matches_pandas_filter() -> None:
+    pytest.importorskip("duckdb")
+    rows = pd.DataFrame(
+        [
+            {"merchant_id": "nz-1", "country_group": "NZ", "txn_count_30d": 3},
+            {"merchant_id": "au-1", "country_group": "AU", "txn_count_30d": 5},
+            {"merchant_id": "nz-2", "country_group": "NZ", "txn_count_30d": 7},
+        ]
+    )
+
+    filtered = duckdb_filter_frame(rows, where_sql='"country_group" = ?', parameters=("NZ",))
+
+    assert filtered["merchant_id"].tolist() == ["nz-1", "nz-2"]
+    assert filtered["txn_count_30d"].tolist() == [3, 7]
+
+
+def test_apply_in_filter_matches_pandas_membership() -> None:
+    pytest.importorskip("duckdb")
+    rows = pd.DataFrame(
+        [
+            {"merchant_id": 1001, "geo_country": "NZ"},
+            {"merchant_id": 1002, "geo_country": "AU"},
+            {"merchant_id": 1003, "geo_country": "NZ"},
+        ]
+    )
+
+    filtered = apply_in_filter(rows, "merchant_id", ["1001", "1003"])
+    expected = rows[rows["merchant_id"].astype(str).isin(["1001", "1003"])]
+
+    assert filtered.reset_index(drop=True).equals(expected.reset_index(drop=True))
+
+
+def test_apply_text_filter_matches_pandas_contains() -> None:
+    pytest.importorskip("duckdb")
+    rows = pd.DataFrame(
+        [
+            {"merchant_id": "a1", "merchant_name": "Queen Street Cafe", "institution_name": "PSP One"},
+            {"merchant_id": "b2", "merchant_name": "Harbour Market", "institution_name": "Auckland PSP"},
+            {"merchant_id": "c3", "merchant_name": None, "institution_name": "Sydney Partner"},
+        ]
+    )
+
+    filtered = apply_text_filter(rows, ["merchant_name", "institution_name"], "auck")
+    expected_mask = (
+        rows["merchant_name"].fillna("").astype(str).str.casefold().str.contains("auck", regex=False)
+        | rows["institution_name"].fillna("").astype(str).str.casefold().str.contains("auck", regex=False)
+    )
+    expected = rows[expected_mask]
+
+    assert filtered.reset_index(drop=True).equals(expected.reset_index(drop=True))
 
 
 def test_new_intake_default_month_range_uses_latest_six_calendar_months() -> None:
@@ -797,15 +1031,94 @@ def test_new_intake_month_options_recover_legacy_october_label() -> None:
 def test_new_intake_default_scope_excludes_online_and_zhenxing() -> None:
     rows = pd.DataFrame(
         {
-            "merchant_id": ["offline", "online", "zhenxing"],
-            "channel_type": ["OFFLINE", "ONLINE", "BOTH"],
-            "is_zhenxing": ["0", "0", "1"],
+            "merchant_id": ["offline", "online", "zhenxing", "numeric_zhenxing"],
+            "channel_type": ["OFFLINE", "ONLINE", "BOTH", "OFFLINE"],
+            "is_zhenxing": ["0", "0", "1", 1.0],
         }
     )
 
-    scoped = _apply_zhenxing_scope(_apply_online_scope(rows, ONLINE_SCOPE_EXCLUDE), "排除圳兴")
+    scoped = _apply_zhenxing_scope(_apply_online_scope(rows, ONLINE_SCOPE_EXCLUDE), "\u6392\u9664\u5733\u5174")
 
     assert scoped["merchant_id"].tolist() == ["offline"]
+
+
+def test_new_intake_query_rows_match_pandas_default_scope(tmp_path: Path) -> None:
+    root = tmp_path / "anz-bi-platform"
+    page_root = root / "processed" / "new_intake"
+    page_root.mkdir(parents=True)
+    rows = pd.DataFrame(
+        [
+            {
+                "merchant_id": "m1",
+                "intake_month": "2025.10",
+                "channel_type": "OFFLINE",
+                "is_zhenxing": 0,
+                "analysis_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "txn_amount_30d": 100,
+            },
+            {
+                "merchant_id": "m2",
+                "intake_month": "2025.11",
+                "channel_type": "ONLINE",
+                "is_zhenxing": 0,
+                "analysis_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "txn_amount_30d": 200,
+            },
+            {
+                "merchant_id": "m3",
+                "intake_month": "2025.12",
+                "channel_type": "OFFLINE",
+                "is_zhenxing": 1.0,
+                "analysis_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "txn_amount_30d": 300,
+            },
+            {
+                "merchant_id": "m4",
+                "intake_month": "2026.03",
+                "channel_type": "OFFLINE",
+                "is_zhenxing": 0,
+                "analysis_country": "AU",
+                "geo_country": "AU",
+                "geo_city": "Sydney",
+                "txn_amount_30d": 400,
+            },
+            {
+                "merchant_id": "m5",
+                "intake_month": "2025.09",
+                "channel_type": "OFFLINE",
+                "is_zhenxing": 0,
+                "analysis_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "txn_amount_30d": 500,
+            },
+        ]
+    )
+    rows.to_parquet(page_root / "new_intake_rows.parquet", index=False)
+    source = data_loader.DataSource(backend="local", local_root=root, amount_unit="major")
+    query = data_loader.NewIntakeQuery(source, "test-version")
+
+    filtered = query.rows(
+        {
+            "in_filters": {},
+            "month_range": ["2025.10", "2026.03"],
+            "online_scope": "exclude",
+            "zhenxing_scope": "exclude",
+        }
+    )
+    expected = _apply_online_scope(
+        _apply_zhenxing_scope(_filter_month_range(rows, "2025.10", "2026.03"), "\u6392\u9664\u5733\u5174"),
+        ONLINE_SCOPE_EXCLUDE,
+    )
+
+    assert filtered["merchant_id"].tolist() == expected["merchant_id"].tolist() == ["m1", "m4"]
+    assert filtered["txn_amount_30d"].tolist() == [100, 400]
 
 
 def test_activation_monitoring_uses_q1_frequency_decline_bands() -> None:
@@ -838,6 +1151,61 @@ def test_activation_activity_windows_are_q1_frequency_in_calendar_order() -> Non
     assert windows["window"].tolist() == ["2026.1", "2026.2", "2026.3"]
     assert windows["txn_count"].tolist() == [33, 22, 11]
     assert windows["active_merchant_count"].tolist() == [2, 2, 2]
+
+
+def test_activation_query_rows_match_pandas_filters(tmp_path: Path) -> None:
+    root = tmp_path / "anz-bi-platform"
+    page_root = root / "processed" / "activation_low_activity"
+    page_root.mkdir(parents=True)
+    rows = pd.DataFrame(
+        [
+            {
+                "merchant_id": "nz-1",
+                "merchant_name": "NZ Cafe",
+                "institution_name": "PSP A",
+                "scope_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "mcc_major_industry": "餐饮类",
+                "trade_cnt_prev_3m": 10,
+                "trade_cnt_prev_2m": 10,
+                "trade_cnt_prev_1m": 0,
+            },
+            {
+                "merchant_id": "nz-2",
+                "merchant_name": "NZ Retail",
+                "institution_name": "PSP B",
+                "scope_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Wellington",
+                "mcc_major_industry": "零售类",
+                "trade_cnt_prev_3m": 8,
+                "trade_cnt_prev_2m": 8,
+                "trade_cnt_prev_1m": 7,
+            },
+            {
+                "merchant_id": "au-1",
+                "merchant_name": "AU Cafe",
+                "institution_name": "PSP A",
+                "scope_country": "AU",
+                "geo_country": "AU",
+                "geo_city": "Sydney",
+                "mcc_major_industry": "餐饮类",
+                "trade_cnt_prev_3m": 9,
+                "trade_cnt_prev_2m": 9,
+                "trade_cnt_prev_1m": 2,
+            },
+        ]
+    )
+    rows.to_parquet(page_root / "activation_candidates.parquet", index=False)
+    source = data_loader.DataSource(backend="local", local_root=root, amount_unit="major")
+    query = data_loader.ActivationLowActivityQuery(source, "test-version")
+
+    filtered = query.rows({"in_filters": {"geo_country": ["NZ"], "mcc_major_industry": ["餐饮类"]}})
+    expected = apply_in_filter(with_reporting_geography(rows, country_columns=["scope_country"]), "geo_country", ["NZ"])
+    expected = apply_in_filter(expected, "mcc_major_industry", ["餐饮类"])
+
+    assert filtered["merchant_id"].tolist() == expected["merchant_id"].tolist() == ["nz-1"]
 
 
 def test_activation_combo_chart_uses_bar_and_line_axes() -> None:

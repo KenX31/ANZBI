@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from charts import PALETTE, empty_chart, horizontal_bar_option, render_echart
-from filters import apply_text_filter, mapped_multiselect_filter
+from filters import apply_in_filter, apply_text_filter, mapped_multiselect_filter
 from metrics import format_int, format_money, sum_number
 from ui_labels import COUNTRY_LABELS, display_table
 
@@ -238,11 +238,11 @@ def _sidebar_filters(monthly: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataFr
         value_map=COUNTRY_LABELS,
     )
     if selected_country:
-        filtered = filtered[filtered["country_group"].astype(str).isin(selected_country)]
+        filtered = apply_in_filter(filtered, "country_group", selected_country)
 
     selected_stock = stock_name_multiselect_filter(filtered, key="rate_coupon_stock_name")
     if selected_stock:
-        filtered = filtered[filtered["stock_id"].astype(str).isin(selected_stock)]
+        filtered = apply_in_filter(filtered, "stock_id", selected_stock)
 
     keyword = st.sidebar.text_input(UI_TEXT["keyword"], key="rate_coupon_query")
     return apply_text_filter(

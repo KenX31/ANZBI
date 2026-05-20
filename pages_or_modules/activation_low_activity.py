@@ -14,7 +14,19 @@ from charts import (
     treemap_option,
 )
 from exports import activation_internal_export, activation_provider_export, csv_bytes
-from filters import apply_text_filter, disabled_multiselect_filter, ka_scope_filter, mapped_multiselect_filter, multiselect_filter, options
+from filters import (
+    KA_SCOPE_ALL,
+    KA_SCOPE_EXCLUDE,
+    KA_SCOPE_ONLY,
+    apply_in_filter,
+    apply_ka_scope,
+    apply_text_filter,
+    disabled_multiselect_filter,
+    ka_scope_filter,
+    mapped_multiselect_filter,
+    multiselect_filter,
+    options,
+)
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
 from metrics import format_int, format_pct, rate, sum_number
 from ui_labels import COUNTRY_LABELS, DECAY_BAND_LABELS, WINDOW_LABELS, display_table, label_value
@@ -33,10 +45,11 @@ SEVERITY_DISPLAY_COLORS = {
 
 
 def render_activation_page(data: dict[str, object]) -> None:
-    rows = with_reporting_geography(
-        data["rows"].copy(),  # type: ignore[index, union-attr]
-        country_columns=["scope_country", "country_group", "merchant_country_code"],
-    )
+    query = data.get("query")
+    if query is not None:
+        rows = _prepare_rows(query.filter_frame().copy())  # type: ignore[union-attr]
+    else:
+        rows = _prepare_rows(data["rows"].copy())  # type: ignore[index, union-attr]
     if rows.empty:
         st.warning("没有可用的活跃监测数据。")
         return
@@ -54,8 +67,11 @@ def render_activation_page(data: dict[str, object]) -> None:
         "这些等级用于生成服务商跟进清单。"
     )
 
-    rows = _with_frequency_decline_band(_normalize_numeric(rows))
-    filtered = _with_priority_label(_sidebar_filters(rows))
+    if query is not None:
+        filtered = _sidebar_filters_query(query, rows)  # type: ignore[arg-type]
+    else:
+        filtered = _sidebar_filters(rows)
+    filtered = _with_priority_label(filtered)
     eligible = int(sum_number(filtered, "eligible_low_activity_flag"))
     low_activity = int(filtered["decay_band"].astype(str).isin(LOW_ACTIVITY_BANDS).sum()) if "decay_band" in filtered else 0
     severe = int((filtered["decay_band"].astype(str) == "severe").sum()) if "decay_band" in filtered else 0
@@ -178,13 +194,21 @@ def render_activation_page(data: dict[str, object]) -> None:
         st.dataframe(display_table(display), use_container_width=True, hide_index=True)
 
 
+def _prepare_rows(df: pd.DataFrame) -> pd.DataFrame:
+    rows = with_reporting_geography(
+        df,
+        country_columns=["scope_country", "country_group", "merchant_country_code"],
+    )
+    return _with_frequency_decline_band(_normalize_numeric(rows))
+
+
 def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     st.sidebar.subheader("活跃监测筛选")
     filtered = df
 
     selected_country = mapped_multiselect_filter("国家", filtered, "geo_country", key="act_country", value_map=COUNTRY_LABELS)
     if selected_country:
-        filtered = filtered[filtered["geo_country"].astype(str).isin(selected_country)]
+        filtered = apply_in_filter(filtered, "geo_country", selected_country)
 
     filtered = ka_scope_filter(filtered, key="act_ka_scope")
 
@@ -200,7 +224,7 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
         else:
             selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
-            filtered = filtered[filtered[column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, column, selected)
 
     keyword = st.sidebar.text_input("商户/机构关键词", key="act_query")
     return apply_text_filter(
@@ -210,13 +234,49 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _sidebar_filters_query(query: object, option_rows: pd.DataFrame) -> pd.DataFrame:
+    st.sidebar.subheader("活跃监测筛选")
+    filtered = option_rows
+    criteria: dict[str, object] = {"in_filters": {}, "residual_in_filters": {}}
+
+    selected_country = mapped_multiselect_filter("国家", filtered, "geo_country", key="act_country", value_map=COUNTRY_LABELS)
+    filtered = _apply_query_in_filter(filtered, criteria, "geo_country", selected_country)
+
+    ka_scope = st.sidebar.selectbox(
+        "KA/SMB范围",
+        (KA_SCOPE_ALL, KA_SCOPE_ONLY, KA_SCOPE_EXCLUDE),
+        key="act_ka_scope",
+        help="KA 来自共享 KA MID 维表；剔除 KA 后即为 SMB/非 KA 商户。",
+    )
+    criteria["ka_scope"] = _ka_scope_mode(ka_scope)
+    filtered = apply_ka_scope(filtered, ka_scope)
+
+    filtered = _apply_geo_filters_query(filtered, criteria)
+
+    for label, column, key in (
+        ("机构", "institution_name", "act_institution"),
+        ("行业", "mcc_major_industry", "act_industry"),
+        ("活跃等级", "decay_band", "act_severity"),
+    ):
+        if column == "decay_band":
+            selected = mapped_multiselect_filter(label, filtered, column, key=key, value_map=DECAY_BAND_LABELS)
+            filtered = _apply_query_in_filter(filtered, criteria, column, selected, pushdown=False)
+        else:
+            selected = multiselect_filter(label, filtered, column, key=key)
+            filtered = _apply_query_in_filter(filtered, criteria, column, selected)
+
+    criteria["text_query"] = st.sidebar.text_input("商户/机构关键词", key="act_query")
+    rows = _prepare_rows(query.rows(criteria))  # type: ignore[attr-defined]
+    return _apply_activation_residual_filters(rows, criteria)
+
+
 def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
     scope = country_scope(df)
     if scope == "NZ":
         return _apply_nz_geo_filters(df)
     if scope == "MIXED":
         selected_city = multiselect_filter("城市", df, "geo_city", key="act_geo_city")
-        filtered = df[df["geo_city"].astype(str).isin(selected_city)] if selected_city else df
+        filtered = apply_in_filter(df, "geo_city", selected_city) if selected_city else df
         if selected_city and country_scope(filtered) == "NZ":
             return _apply_nz_geo_filters(filtered, selected_city=selected_city)
         if selected_city and country_scope(filtered) == "AU":
@@ -225,12 +285,27 @@ def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
     return _apply_standard_geo_filters(df)
 
 
+def _apply_geo_filters_query(df: pd.DataFrame, criteria: dict[str, object]) -> pd.DataFrame:
+    scope = country_scope(df)
+    if scope == "NZ":
+        return _apply_nz_geo_filters_query(df, criteria)
+    if scope == "MIXED":
+        selected_city = multiselect_filter("城市", df, "geo_city", key="act_geo_city")
+        filtered = _apply_query_in_filter(df, criteria, "geo_city", selected_city)
+        if selected_city and country_scope(filtered) == "NZ":
+            return _apply_nz_geo_filters_query(filtered, criteria, selected_city=selected_city)
+        if selected_city and country_scope(filtered) == "AU":
+            return _apply_standard_geo_filters_query(filtered, criteria, skip_columns={"geo_city"})
+        return filtered
+    return _apply_standard_geo_filters_query(df, criteria)
+
+
 def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None = None) -> pd.DataFrame:
     filtered = df
     if selected_city is None:
         selected_city = multiselect_filter("城市", filtered, "geo_city", key="act_geo_city")
         if selected_city:
-            filtered = filtered[filtered["geo_city"].astype(str).isin(selected_city)]
+            filtered = apply_in_filter(filtered, "geo_city", selected_city)
 
     area_key = "act_nz_geo_area"
     if not selected_city:
@@ -248,7 +323,7 @@ def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None =
     else:
         selected_area = multiselect_filter("NZ 地理片区", filtered, "nz_geo_area", key=area_key)
         if selected_area:
-            filtered = filtered[filtered["nz_geo_area"].astype(str).isin(selected_area)]
+            filtered = apply_in_filter(filtered, "nz_geo_area", selected_area)
 
     for label, column, key in (
         ("NZ 商圈集群", "nz_business_cluster", "act_nz_cluster"),
@@ -256,7 +331,44 @@ def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None =
     ):
         selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
-            filtered = filtered[filtered[column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, column, selected)
+    return filtered
+
+
+def _apply_nz_geo_filters_query(
+    df: pd.DataFrame,
+    criteria: dict[str, object],
+    *,
+    selected_city: list[str] | None = None,
+) -> pd.DataFrame:
+    filtered = df
+    if selected_city is None:
+        selected_city = multiselect_filter("城市", filtered, "geo_city", key="act_geo_city")
+        filtered = _apply_query_in_filter(filtered, criteria, "geo_city", selected_city)
+
+    area_key = "act_nz_geo_area"
+    if not selected_city:
+        disabled_multiselect_filter(
+            "NZ 地理片区",
+            key=area_key,
+            help_text="请先选择城市，之后才能选择 NZ 地理片区。",
+        )
+    elif not options(filtered, "nz_geo_area"):
+        disabled_multiselect_filter(
+            "NZ 地理片区",
+            key=area_key,
+            help_text="所选城市暂无已审核的 NZ 地理片区。",
+        )
+    else:
+        selected_area = multiselect_filter("NZ 地理片区", filtered, "nz_geo_area", key=area_key)
+        filtered = _apply_query_in_filter(filtered, criteria, "nz_geo_area", selected_area)
+
+    for label, column, key in (
+        ("NZ 商圈集群", "nz_business_cluster", "act_nz_cluster"),
+        ("街区", "geo_suburb", "act_geo_suburb"),
+    ):
+        selected = multiselect_filter(label, filtered, column, key=key)
+        filtered = _apply_query_in_filter(filtered, criteria, column, selected)
     return filtered
 
 
@@ -268,8 +380,72 @@ def _apply_standard_geo_filters(df: pd.DataFrame, *, skip_columns: set[str] | No
             continue
         selected = multiselect_filter(spec.label, filtered, spec.column, key=f"act_{spec.key_suffix}")
         if selected:
-            filtered = filtered[filtered[spec.column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, spec.column, selected)
     return filtered
+
+
+def _apply_standard_geo_filters_query(
+    df: pd.DataFrame,
+    criteria: dict[str, object],
+    *,
+    skip_columns: set[str] | None = None,
+) -> pd.DataFrame:
+    filtered = df
+    skip_columns = skip_columns or set()
+    for spec in sidebar_geo_filter_specs(country_scope(filtered)):
+        if spec.column in skip_columns:
+            continue
+        selected = multiselect_filter(spec.label, filtered, spec.column, key=f"act_{spec.key_suffix}")
+        filtered = _apply_query_in_filter(filtered, criteria, spec.column, selected)
+    return filtered
+
+
+def _apply_query_in_filter(
+    df: pd.DataFrame,
+    criteria: dict[str, object],
+    column: str,
+    selected: list[str],
+    *,
+    pushdown: bool = True,
+) -> pd.DataFrame:
+    if not selected:
+        return df
+    target = "in_filters" if pushdown else "residual_in_filters"
+    filters = criteria.setdefault(target, {})
+    if isinstance(filters, dict):
+        filters[column] = [str(value) for value in selected]
+    return apply_in_filter(df, column, selected)
+
+
+def _apply_activation_residual_filters(df: pd.DataFrame, criteria: dict[str, object]) -> pd.DataFrame:
+    filtered = df
+    filtered = apply_ka_scope(filtered, _ka_scope_label(str(criteria.get("ka_scope") or "all")))
+    for group in ("in_filters", "residual_in_filters"):
+        filters = criteria.get(group) if isinstance(criteria.get(group), dict) else {}
+        for column, selected in filters.items():
+            if isinstance(selected, list):
+                filtered = apply_in_filter(filtered, column, selected)
+    return apply_text_filter(
+        filtered,
+        ["merchant_id", "merchant_name", "institution_name", "geo_reporting_name", "geo_city", "geo_suburb"],
+        str(criteria.get("text_query") or ""),
+    )
+
+
+def _ka_scope_mode(scope: str) -> str:
+    if scope == KA_SCOPE_ONLY:
+        return "only"
+    if scope == KA_SCOPE_EXCLUDE:
+        return "exclude"
+    return "all"
+
+
+def _ka_scope_label(mode: str) -> str:
+    if mode == "only":
+        return KA_SCOPE_ONLY
+    if mode == "exclude":
+        return KA_SCOPE_EXCLUDE
+    return KA_SCOPE_ALL
 
 
 def _normalize_numeric(df: pd.DataFrame) -> pd.DataFrame:

@@ -5,6 +5,7 @@ from typing import Iterable
 import pandas as pd
 import streamlit as st
 
+from data_io import duckdb_filter_frame
 from ui_labels import label_value
 
 
@@ -71,18 +72,35 @@ def apply_in_filter(df: pd.DataFrame, column: str, selected: Iterable[str]) -> p
     selected = [str(value) for value in selected if str(value)]
     if not selected or column not in df.columns:
         return df
-    return df[df[column].astype(str).isin(selected)]
+    placeholders = ", ".join("?" for _ in selected)
+    try:
+        return duckdb_filter_frame(
+            df,
+            where_sql=f"cast({_quote_identifier(column)} as varchar) in ({placeholders})",
+            parameters=tuple(selected),
+        )
+    except Exception:
+        return df[df[column].astype(str).isin(selected)]
 
 
 def apply_text_filter(df: pd.DataFrame, columns: list[str], query: str) -> pd.DataFrame:
     query = str(query or "").strip().casefold()
     if not query:
         return df
-    mask = pd.Series(False, index=df.index)
-    for column in columns:
-        if column in df.columns:
+    existing = [column for column in columns if column in df.columns]
+    if not existing:
+        return df
+    where_sql = " or ".join(
+        f"contains(lower(coalesce(cast({_quote_identifier(column)} as varchar), '')), ?)"
+        for column in existing
+    )
+    try:
+        return duckdb_filter_frame(df, where_sql=where_sql, parameters=tuple(query for _ in existing))
+    except Exception:
+        mask = pd.Series(False, index=df.index)
+        for column in existing:
             mask = mask | df[column].fillna("").astype(str).str.casefold().str.contains(query, regex=False)
-    return df[mask]
+        return df[mask]
 
 
 def ka_scope_filter(df: pd.DataFrame, *, key: str) -> pd.DataFrame:
@@ -131,3 +149,7 @@ def _prune_multiselect_state(key: str, valid_values: list[str]) -> None:
     pruned = [value for value in current if value in valid]
     if pruned != current:
         st.session_state[key] = pruned
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + str(value).replace('"', '""') + '"'

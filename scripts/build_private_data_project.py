@@ -31,6 +31,7 @@ VERSION = "2026.05.18-v1"
 SCHEMA_VERSION = "1.0"
 EXPORT_CONTRACT_VERSION = "1.1"
 GEO_CONTRACT_VERSION = "country-aware-1.0"
+STORAGE_FORMAT = "parquet"
 
 DEFAULT_NEW_INTAKE_PREPARED = Path(
     r"D:\Tencent\Data analysis\Wechat-Pay-ANZ-MAP\tmp\new-intake-refresh-data\prepared\new-intake"
@@ -240,18 +241,18 @@ def main() -> int:
     )
     geo_bridge = geo_reporting_bridge_contract()
 
-    _write_dataframe_csv(new_intake_out / "new_intake_rows.csv", new_intake_table)
-    _write_dataframe_csv(activation_out / "activation_candidates.csv", activation_table)
-    _write_dataframe_csv(silent_out / "silent_merchants_rows.csv", silent_table)
-    _write_dataframe_csv(silent_out / "silent_merchants_aggregate.csv", silent_aggregate_table)
-    _write_dataframe_csv(shared_out / "geo_reporting_bridge.csv", geo_bridge)
+    _write_dataframe_csv(new_intake_out / "new_intake_rows.parquet", new_intake_table)
+    _write_dataframe_csv(activation_out / "activation_candidates.parquet", activation_table)
+    _write_dataframe_csv(silent_out / "silent_merchants_rows.parquet", silent_table)
+    _write_dataframe_csv(silent_out / "silent_merchants_aggregate.parquet", silent_aggregate_table)
+    _write_dataframe_csv(shared_out / "geo_reporting_bridge.parquet", geo_bridge)
     _write_rollup_json_as_csv(
         new_intake_prepared / "new_intake_institution_rollup.json",
-        new_intake_out / "new_intake_institution_rollup.csv",
+        new_intake_out / "new_intake_institution_rollup.parquet",
     )
     _write_rollup_json_as_csv(
         activation_prepared / "area_low_activity_rollup.json",
-        activation_out / "area_low_activity_rollup.csv",
+        activation_out / "area_low_activity_rollup.parquet",
         item_key="items",
     )
 
@@ -265,15 +266,15 @@ def main() -> int:
     silent_provider = silent_merchants_provider_export(silent_table)
     silent_internal = silent_merchants_internal_export(silent_table)
 
-    _write_dataframe_csv(new_intake_out / "new_intake_provider_export.csv", new_intake_provider)
-    _write_dataframe_csv(new_intake_out / "new_intake_internal_record_export.csv", new_intake_internal)
-    _write_dataframe_csv(new_intake_out / "new_intake_export.csv", new_intake_provider)
-    _write_dataframe_csv(activation_out / "activation_provider_export.csv", activation_provider)
-    _write_dataframe_csv(activation_out / "activation_internal_record_export.csv", activation_internal)
-    _write_dataframe_csv(activation_out / "activation_export.csv", activation_provider)
-    _write_dataframe_csv(silent_out / "silent_merchants_provider_export.csv", silent_provider)
-    _write_dataframe_csv(silent_out / "silent_merchants_internal_record_export.csv", silent_internal)
-    _write_dataframe_csv(silent_out / "silent_merchants_export.csv", silent_provider)
+    _write_dataframe_csv(new_intake_out / "new_intake_provider_export.parquet", new_intake_provider)
+    _write_dataframe_csv(new_intake_out / "new_intake_internal_record_export.parquet", new_intake_internal)
+    _write_dataframe_csv(new_intake_out / "new_intake_export.parquet", new_intake_provider)
+    _write_dataframe_csv(activation_out / "activation_provider_export.parquet", activation_provider)
+    _write_dataframe_csv(activation_out / "activation_internal_record_export.parquet", activation_internal)
+    _write_dataframe_csv(activation_out / "activation_export.parquet", activation_provider)
+    _write_dataframe_csv(silent_out / "silent_merchants_provider_export.parquet", silent_provider)
+    _write_dataframe_csv(silent_out / "silent_merchants_internal_record_export.parquet", silent_internal)
+    _write_dataframe_csv(silent_out / "silent_merchants_export.parquet", silent_provider)
 
     silent_summary = _silent_summary(
         rows=silent_table,
@@ -292,6 +293,7 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "contract": {
             "dataset_layout": "page_scoped",
+            "storage_format": STORAGE_FORMAT,
             "page_root": "processed/<page_id>/",
             "shared_root": "processed/shared_dimensions/",
             "geo_project": "anz-geography",
@@ -311,60 +313,64 @@ def main() -> int:
             "new_intake": {
                 "schema_version": SCHEMA_VERSION,
                 "export_contract_version": EXPORT_CONTRACT_VERSION,
+                "storage_format": STORAGE_FORMAT,
                 "page_root": "processed/new_intake/",
                 "privacy_level": "aggregate_plus_desensitized_merchant_detail",
                 "source_period": _new_intake_source_period(new_intake_summary),
                 "row_count": len(new_intake_rows),
                 "files": {
-                    "rows": "processed/new_intake/new_intake_rows.csv",
+                    "rows": "processed/new_intake/new_intake_rows.parquet",
                     "summary": "processed/new_intake/new_intake_summary.json",
-                    "institution_rollup": "processed/new_intake/new_intake_institution_rollup.csv",
-                    "export": "processed/new_intake/new_intake_export.csv",
-                    "provider_export": "processed/new_intake/new_intake_provider_export.csv",
-                    "internal_record_export": "processed/new_intake/new_intake_internal_record_export.csv",
+                    "institution_rollup": "processed/new_intake/new_intake_institution_rollup.parquet",
+                    "export": "processed/new_intake/new_intake_export.parquet",
+                    "provider_export": "processed/new_intake/new_intake_provider_export.parquet",
+                    "internal_record_export": "processed/new_intake/new_intake_internal_record_export.parquet",
                 },
             },
             "activation_low_activity": {
                 "schema_version": SCHEMA_VERSION,
                 "export_contract_version": EXPORT_CONTRACT_VERSION,
+                "storage_format": STORAGE_FORMAT,
                 "page_root": "processed/activation_low_activity/",
                 "privacy_level": "aggregate_plus_desensitized_merchant_detail",
                 "source_period": "prev_3m_candidate_pool",
                 "row_count": len(activation_rows),
                 "files": {
-                    "rows": "processed/activation_low_activity/activation_candidates.csv",
+                    "rows": "processed/activation_low_activity/activation_candidates.parquet",
                     "summary": "processed/activation_low_activity/low_activity_bi_summary.json",
-                    "area_rollup": "processed/activation_low_activity/area_low_activity_rollup.csv",
-                    "export": "processed/activation_low_activity/activation_export.csv",
-                    "provider_export": "processed/activation_low_activity/activation_provider_export.csv",
-                    "internal_record_export": "processed/activation_low_activity/activation_internal_record_export.csv",
+                    "area_rollup": "processed/activation_low_activity/area_low_activity_rollup.parquet",
+                    "export": "processed/activation_low_activity/activation_export.parquet",
+                    "provider_export": "processed/activation_low_activity/activation_provider_export.parquet",
+                    "internal_record_export": "processed/activation_low_activity/activation_internal_record_export.parquet",
                 },
             },
             "silent_merchants": {
                 "schema_version": SCHEMA_VERSION,
                 "export_contract_version": EXPORT_CONTRACT_VERSION,
+                "storage_format": STORAGE_FORMAT,
                 "page_root": "processed/silent_merchants/",
                 "privacy_level": "aggregate_plus_desensitized_merchant_detail",
                 "source_period": "2023-01-01 to 2026-05-01; snapshot 20260501",
                 "row_count": len(silent_table),
                 "aggregate_merchant_count": silent_summary["aggregate_merchant_count"],
                 "files": {
-                    "rows": "processed/silent_merchants/silent_merchants_rows.csv",
+                    "rows": "processed/silent_merchants/silent_merchants_rows.parquet",
                     "summary": "processed/silent_merchants/silent_merchants_summary.json",
-                    "aggregate": "processed/silent_merchants/silent_merchants_aggregate.csv",
-                    "export": "processed/silent_merchants/silent_merchants_export.csv",
-                    "provider_export": "processed/silent_merchants/silent_merchants_provider_export.csv",
-                    "internal_record_export": "processed/silent_merchants/silent_merchants_internal_record_export.csv",
+                    "aggregate": "processed/silent_merchants/silent_merchants_aggregate.parquet",
+                    "export": "processed/silent_merchants/silent_merchants_export.parquet",
+                    "provider_export": "processed/silent_merchants/silent_merchants_provider_export.parquet",
+                    "internal_record_export": "processed/silent_merchants/silent_merchants_internal_record_export.parquet",
                 },
             },
         },
         "shared_dimensions": {
             "geo_reporting_bridge": {
                 "schema_version": GEO_CONTRACT_VERSION,
+                "storage_format": STORAGE_FORMAT,
                 "privacy_level": "non_sensitive_contract",
                 "row_count": len(geo_bridge),
                 "files": {
-                    "bridge": "processed/shared_dimensions/geo_reporting_bridge.csv",
+                    "bridge": "processed/shared_dimensions/geo_reporting_bridge.parquet",
                 },
             },
         },
@@ -417,11 +423,11 @@ def _write_silent_page_slice(
 
     silent_out = output_root / "processed" / "silent_merchants"
     silent_out.mkdir(parents=True, exist_ok=True)
-    _write_dataframe_csv(silent_out / "silent_merchants_rows.csv", silent_table)
-    _write_dataframe_csv(silent_out / "silent_merchants_aggregate.csv", silent_aggregate_table)
-    _write_dataframe_csv(silent_out / "silent_merchants_provider_export.csv", silent_provider)
-    _write_dataframe_csv(silent_out / "silent_merchants_internal_record_export.csv", silent_internal)
-    _write_dataframe_csv(silent_out / "silent_merchants_export.csv", silent_provider)
+    _write_dataframe_csv(silent_out / "silent_merchants_rows.parquet", silent_table)
+    _write_dataframe_csv(silent_out / "silent_merchants_aggregate.parquet", silent_aggregate_table)
+    _write_dataframe_csv(silent_out / "silent_merchants_provider_export.parquet", silent_provider)
+    _write_dataframe_csv(silent_out / "silent_merchants_internal_record_export.parquet", silent_internal)
+    _write_dataframe_csv(silent_out / "silent_merchants_export.parquet", silent_provider)
     (silent_out / "silent_merchants_summary.json").write_text(
         json.dumps(silent_summary, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -430,6 +436,7 @@ def _write_silent_page_slice(
     manifest = _load_or_create_manifest(output_root)
     manifest["version"] = version
     manifest["generated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    manifest.setdefault("contract", {})["storage_format"] = STORAGE_FORMAT
     manifest.setdefault("source", {})
     manifest["source"]["silent_detail"] = str(silent_detail)
     manifest["source"]["silent_aggregate"] = str(silent_aggregate)
@@ -455,6 +462,7 @@ def _load_or_create_manifest(output_root: Path) -> dict[str, Any]:
         "project_id": PROJECT_ID,
         "contract": {
             "dataset_layout": "page_scoped",
+            "storage_format": STORAGE_FORMAT,
             "page_root": "processed/<page_id>/",
             "shared_root": "processed/shared_dimensions/",
             "geo_project": "anz-geography",
@@ -474,18 +482,19 @@ def _silent_manifest_entry(summary: dict[str, Any], row_count: int) -> dict[str,
     return {
         "schema_version": SCHEMA_VERSION,
         "export_contract_version": EXPORT_CONTRACT_VERSION,
+        "storage_format": STORAGE_FORMAT,
         "page_root": "processed/silent_merchants/",
         "privacy_level": "aggregate_plus_desensitized_merchant_detail",
         "source_period": summary["source_period"],
         "row_count": row_count,
         "aggregate_merchant_count": summary["aggregate_merchant_count"],
         "files": {
-            "rows": "processed/silent_merchants/silent_merchants_rows.csv",
+            "rows": "processed/silent_merchants/silent_merchants_rows.parquet",
             "summary": "processed/silent_merchants/silent_merchants_summary.json",
-            "aggregate": "processed/silent_merchants/silent_merchants_aggregate.csv",
-            "export": "processed/silent_merchants/silent_merchants_export.csv",
-            "provider_export": "processed/silent_merchants/silent_merchants_provider_export.csv",
-            "internal_record_export": "processed/silent_merchants/silent_merchants_internal_record_export.csv",
+            "aggregate": "processed/silent_merchants/silent_merchants_aggregate.parquet",
+            "export": "processed/silent_merchants/silent_merchants_export.parquet",
+            "provider_export": "processed/silent_merchants/silent_merchants_provider_export.parquet",
+            "internal_record_export": "processed/silent_merchants/silent_merchants_internal_record_export.parquet",
         },
     }
 
@@ -636,12 +645,17 @@ def _write_rollup_json_as_csv(path: Path, output_path: Path, *, item_key: str | 
     if not isinstance(rows, list):
         rows = []
     fieldnames: list[str] = []
+    table_rows: list[dict[str, Any]] = []
     for row in rows:
         if isinstance(row, dict):
+            table_rows.append(row)
             for key in row:
                 if key not in fieldnames:
                     fieldnames.append(key)
-    _write_csv(output_path, (row for row in rows if isinstance(row, dict)), fieldnames)
+    if output_path.suffix.casefold() == ".parquet":
+        _write_dataframe_csv(output_path, pd.DataFrame(table_rows, columns=fieldnames))
+    else:
+        _write_csv(output_path, table_rows, fieldnames)
 
 
 def _write_csv(path: Path, rows: Any, fieldnames: list[str]) -> int:
@@ -656,7 +670,10 @@ def _write_csv(path: Path, rows: Any, fieldnames: list[str]) -> int:
 
 
 def _write_dataframe_csv(path: Path, df: pd.DataFrame) -> int:
-    df.to_csv(path, index=False, encoding="utf-8-sig")
+    if path.suffix.casefold() == ".parquet":
+        df.to_parquet(path, index=False)
+    else:
+        df.to_csv(path, index=False, encoding="utf-8-sig")
     return len(df)
 
 
