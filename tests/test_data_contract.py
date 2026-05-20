@@ -522,7 +522,19 @@ def test_activation_provider_export_excludes_internal_ids() -> None:
     assert "candidate_rank" not in provider.columns
     assert "地理展示层级" not in provider.columns
     assert "州/省" not in provider.columns
-    assert "服务商跟进级别" in provider.columns
+    assert "服务商跟进级别" not in provider.columns
+    assert provider.columns.tolist() == [
+        "商家名",
+        "所在城市",
+        "NZ地理片区",
+        "Suburb",
+        "详细地址",
+        "行业",
+        "铺设优先级",
+    ]
+    assert provider.loc[0, "详细地址"] == "Demo address"
+    assert provider.loc[0, "行业"] == "餐饮类"
+    assert provider.loc[0, "铺设优先级"] == "优先铺设"
     assert "geo_reporting_level" not in internal.columns
     assert "geo_reporting_level_label" not in internal.columns
     assert "merchant_id" in internal.columns
@@ -567,7 +579,9 @@ def test_activation_provider_export_keeps_mixed_country_specific_columns() -> No
                 "business_city": "Auckland",
                 "business_suburb": "CBD",
                 "geo_area": "Auckland Central",
-                "priority_label": "严重下滑",
+                "decay_band": "severe",
+                "normalized_address": "NZ fallback address",
+                "mcc_name": "Restaurant",
             },
             {
                 "merchant_id": "au",
@@ -576,7 +590,20 @@ def test_activation_provider_export_keeps_mixed_country_specific_columns() -> No
                 "state": "NSW",
                 "business_city": "Sydney",
                 "business_suburb": "Haymarket",
-                "priority_label": "明显下滑",
+                "decay_band": "high",
+                "address": "AU address",
+                "mcc_industry": "Retail",
+            },
+            {
+                "merchant_id": "nz-medium",
+                "merchant_name": "NZ Medium Merchant",
+                "scope_country": "NZ",
+                "business_city": "Wellington",
+                "business_suburb": "Te Aro",
+                "geo_area": "Wellington Central",
+                "decay_band": "medium",
+                "address": "NZ medium address",
+                "mcc": "5812",
             },
         ]
     )
@@ -584,10 +611,22 @@ def test_activation_provider_export_keeps_mixed_country_specific_columns() -> No
     provider = activation_provider_export(rows)
 
     assert "地理展示层级" not in provider.columns
-    assert "州/省" in provider.columns
+    assert "州/省" not in provider.columns
     assert "NZ地理片区" in provider.columns
+    assert provider.columns.tolist() == [
+        "商家名",
+        "所在城市",
+        "NZ地理片区",
+        "Suburb",
+        "详细地址",
+        "行业",
+        "铺设优先级",
+    ]
     assert provider.loc[0, "NZ地理片区"] == "Auckland Central"
-    assert provider.loc[1, "州/省"] == "NSW"
+    assert provider.loc[1, "NZ地理片区"] == ""
+    assert provider["铺设优先级"].tolist() == ["优先铺设", "重点铺设", "机会铺设"]
+    assert provider["详细地址"].tolist() == ["NZ fallback address", "AU address", "NZ medium address"]
+    assert provider["行业"].tolist() == ["Restaurant", "Retail", "5812"]
 
 
 def test_silent_provider_export_excludes_internal_ids_and_uses_chinese_headers() -> None:
@@ -610,7 +649,31 @@ def test_silent_provider_export_excludes_internal_ids_and_uses_chinese_headers()
                 "business_type": "OFFLINE",
                 "address": "Unit 902/108 Queens Rd",
                 "mcc_code": "0744",
-            }
+            },
+            {
+                "merchant_id": "823448012",
+                "merchant_display_name": "Initial Silent Merchant",
+                "country_group": "NZ",
+                "merchant_country_code": "554",
+                "business_city": "Auckland",
+                "business_suburb": "CBD",
+                "geo_area": "Auckland Central",
+                "silence_tier": "initial_silent",
+                "stores_address": "1 Queen Street",
+                "mcc_name": "Restaurant",
+            },
+            {
+                "merchant_id": "823448013",
+                "merchant_display_name": "Deep Silent Merchant",
+                "country_group": "NZ",
+                "merchant_country_code": "554",
+                "business_city": "Wellington",
+                "business_suburb": "Te Aro",
+                "geo_area": "Wellington Central",
+                "silence_tier": "deep_silent",
+                "address": "2 Cuba Street",
+                "mcc_major_industry": "餐饮类",
+            },
         ]
     )
 
@@ -621,23 +684,17 @@ def test_silent_provider_export_excludes_internal_ids_and_uses_chinese_headers()
     assert "institution_id" not in provider.columns
     assert provider.columns.tolist() == [
         "商家名",
-        "国家",
-        "州/省",
         "所在城市",
-        "街区",
-        "邮编",
-        "地理展示名称",
-        "沉默分层",
-        "接入时长",
-        "接入时间",
-        "业务类型",
+        "NZ地理片区",
+        "Suburb",
         "详细地址",
-        "MCC代码",
+        "行业",
+        "铺设优先级",
     ]
-    assert provider.loc[0, "国家"] == "澳大利亚"
-    assert provider.loc[0, "沉默分层"] == "新接入180天未激活"
-    assert provider.loc[0, "接入时长"] == "接入180-359天"
-    assert provider.loc[0, "业务类型"] == "线下"
+    assert "服务商跟进级别" not in provider.columns
+    assert provider["详细地址"].tolist() == ["Unit 902/108 Queens Rd", "1 Queen Street", "2 Cuba Street"]
+    assert provider["行业"].tolist() == ["0744", "Restaurant", "餐饮类"]
+    assert provider["铺设优先级"].tolist() == ["优先铺设", "重点铺设", "机会铺设"]
     assert "merchant_id" in internal.columns
     assert "institution_id" in internal.columns
     assert internal.loc[0, "merchant_id"] == "823448011"
