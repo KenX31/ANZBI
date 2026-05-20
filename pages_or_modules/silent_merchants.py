@@ -26,7 +26,14 @@ from exports import (
     silent_merchants_internal_export,
     silent_merchants_provider_export,
 )
-from filters import apply_text_filter, disabled_multiselect_filter, mapped_multiselect_filter, multiselect_filter, options
+from filters import (
+    apply_in_filter,
+    apply_text_filter,
+    disabled_multiselect_filter,
+    mapped_multiselect_filter,
+    multiselect_filter,
+    options,
+)
 from geography import GeoFilterSpec, country_scope, with_reporting_geography
 from metrics import format_int, format_pct, rate
 
@@ -221,7 +228,7 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
         "国家", filtered, "geo_country", key="silent_country", value_map=SILENT_COUNTRY_LABELS
     )
     if selected_country:
-        filtered = filtered[filtered["geo_country"].astype(str).isin(selected_country)]
+        filtered = apply_in_filter(filtered, "geo_country", selected_country)
 
     filtered = _apply_geo_filters(filtered)
 
@@ -229,19 +236,19 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
         "沉默分层", filtered, "silence_tier", key="silent_tier", value_map=SILENT_TIER_LABELS
     )
     if selected_tier:
-        filtered = filtered[filtered["silence_tier"].astype(str).isin(selected_tier)]
+        filtered = apply_in_filter(filtered, "silence_tier", selected_tier)
 
     selected_age = mapped_multiselect_filter(
         "接入时长", filtered, "access_age_band", key="silent_age", value_map=SILENT_ACCESS_AGE_LABELS
     )
     if selected_age:
-        filtered = filtered[filtered["access_age_band"].astype(str).isin(selected_age)]
+        filtered = apply_in_filter(filtered, "access_age_band", selected_age)
 
     selected_business_type = mapped_multiselect_filter(
         "业务类型", filtered, "business_type", key="silent_business_type", value_map=SILENT_BUSINESS_TYPE_LABELS
     )
     if selected_business_type:
-        filtered = filtered[filtered["business_type"].astype(str).isin(selected_business_type)]
+        filtered = apply_in_filter(filtered, "business_type", selected_business_type)
 
     for label, column, key in (
         ("机构分组", "institution_group", "silent_institution_group"),
@@ -250,7 +257,7 @@ def _sidebar_filters(df: pd.DataFrame) -> pd.DataFrame:
     ):
         selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
-            filtered = filtered[filtered[column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, column, selected)
 
     address_scope = st.sidebar.selectbox("地址可用性", list(ADDRESS_SCOPE_LABELS), key="silent_address_scope")
     filtered = _filter_address_scope(filtered, ADDRESS_SCOPE_LABELS[address_scope])
@@ -295,7 +302,7 @@ def _apply_geo_filters(df: pd.DataFrame) -> pd.DataFrame:
         return _apply_nz_geo_filters(df)
     if scope == "MIXED":
         selected_city = multiselect_filter("城市", df, "geo_city", key="silent_geo_city")
-        filtered = df[df["geo_city"].astype(str).isin(selected_city)] if selected_city else df
+        filtered = apply_in_filter(df, "geo_city", selected_city) if selected_city else df
         if selected_city and country_scope(filtered) == "NZ":
             return _apply_nz_geo_filters(filtered, selected_city=selected_city)
         if selected_city and country_scope(filtered) == "AU":
@@ -309,7 +316,7 @@ def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None =
     if selected_city is None:
         selected_city = multiselect_filter("城市", filtered, "geo_city", key="silent_geo_city")
         if selected_city:
-            filtered = filtered[filtered["geo_city"].astype(str).isin(selected_city)]
+            filtered = apply_in_filter(filtered, "geo_city", selected_city)
 
     area_key = "silent_nz_geo_area"
     if not selected_city:
@@ -327,7 +334,7 @@ def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None =
     else:
         selected_area = multiselect_filter("NZ 地理片区", filtered, "nz_geo_area", key=area_key)
         if selected_area:
-            filtered = filtered[filtered["nz_geo_area"].astype(str).isin(selected_area)]
+            filtered = apply_in_filter(filtered, "nz_geo_area", selected_area)
 
     for label, column, key in (
         ("NZ 商圈集群", "nz_business_cluster", "silent_nz_cluster"),
@@ -335,7 +342,7 @@ def _apply_nz_geo_filters(df: pd.DataFrame, *, selected_city: list[str] | None =
     ):
         selected = multiselect_filter(label, filtered, column, key=key)
         if selected:
-            filtered = filtered[filtered[column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, column, selected)
     return filtered
 
 
@@ -347,7 +354,7 @@ def _apply_standard_geo_filters(df: pd.DataFrame, *, skip_columns: set[str] | No
             continue
         selected = multiselect_filter(spec.label, filtered, spec.column, key=f"silent_{spec.key_suffix}")
         if selected:
-            filtered = filtered[filtered[spec.column].astype(str).isin(selected)]
+            filtered = apply_in_filter(filtered, spec.column, selected)
     return filtered
 
 

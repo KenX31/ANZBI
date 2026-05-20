@@ -52,7 +52,7 @@ from exports import (
 )
 from geo_matching import StreamlitGeoMatcher, append_staging_geo_columns
 from geography import country_scope, sidebar_geo_filter_specs, with_reporting_geography
-from filters import KA_SCOPE_EXCLUDE, KA_SCOPE_ONLY, apply_ka_scope
+from filters import KA_SCOPE_EXCLUDE, KA_SCOPE_ONLY, apply_in_filter, apply_ka_scope, apply_text_filter
 from pages_or_modules.new_intake import (
     ONLINE_SCOPE_EXCLUDE,
     _apply_online_scope,
@@ -830,6 +830,42 @@ def test_duckdb_filter_frame_matches_pandas_filter() -> None:
 
     assert filtered["merchant_id"].tolist() == ["nz-1", "nz-2"]
     assert filtered["txn_count_30d"].tolist() == [3, 7]
+
+
+def test_apply_in_filter_matches_pandas_membership() -> None:
+    pytest.importorskip("duckdb")
+    rows = pd.DataFrame(
+        [
+            {"merchant_id": 1001, "geo_country": "NZ"},
+            {"merchant_id": 1002, "geo_country": "AU"},
+            {"merchant_id": 1003, "geo_country": "NZ"},
+        ]
+    )
+
+    filtered = apply_in_filter(rows, "merchant_id", ["1001", "1003"])
+    expected = rows[rows["merchant_id"].astype(str).isin(["1001", "1003"])]
+
+    assert filtered.reset_index(drop=True).equals(expected.reset_index(drop=True))
+
+
+def test_apply_text_filter_matches_pandas_contains() -> None:
+    pytest.importorskip("duckdb")
+    rows = pd.DataFrame(
+        [
+            {"merchant_id": "a1", "merchant_name": "Queen Street Cafe", "institution_name": "PSP One"},
+            {"merchant_id": "b2", "merchant_name": "Harbour Market", "institution_name": "Auckland PSP"},
+            {"merchant_id": "c3", "merchant_name": None, "institution_name": "Sydney Partner"},
+        ]
+    )
+
+    filtered = apply_text_filter(rows, ["merchant_name", "institution_name"], "auck")
+    expected_mask = (
+        rows["merchant_name"].fillna("").astype(str).str.casefold().str.contains("auck", regex=False)
+        | rows["institution_name"].fillna("").astype(str).str.casefold().str.contains("auck", regex=False)
+    )
+    expected = rows[expected_mask]
+
+    assert filtered.reset_index(drop=True).equals(expected.reset_index(drop=True))
 
 
 def test_new_intake_default_month_range_uses_latest_six_calendar_months() -> None:

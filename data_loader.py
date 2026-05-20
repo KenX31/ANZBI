@@ -101,6 +101,11 @@ def resolve_data_source() -> DataSource:
 
 def load_project_manifest() -> dict[str, Any]:
     source = resolve_data_source()
+    return _load_project_manifest_cached(source)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def _load_project_manifest_cached(source: DataSource) -> dict[str, Any]:
     manifest = _load_json(source, "manifest.json")
     return {"manifest": manifest}
 
@@ -278,12 +283,11 @@ def _load_project_frame(source: DataSource, project: str, relative_path: str) ->
             candidates = ", ".join(table_path_candidates(relative_path))
             raise DataLoadError(f"Missing local data file for {path}; checked {candidates}") from None
     if source.backend == "github_private":
-        return _load_github_project_frame_cached(source, project, relative_path)
+        return _load_github_project_frame(source, project, relative_path)
     raise DataLoadError(f"Unsupported DATA_BACKEND: {source.backend}")
 
 
-@st.cache_data(show_spinner=False, max_entries=128)
-def _load_github_project_frame_cached(source: DataSource, project: str, relative_path: str) -> pd.DataFrame:
+def _load_github_project_frame(source: DataSource, project: str, relative_path: str) -> pd.DataFrame:
     last_missing: DataLoadError | None = None
     for candidate in table_path_candidates(relative_path):
         try:
@@ -369,6 +373,7 @@ def _load_frame_optional(source: DataSource, relative_path: str) -> pd.DataFrame
         return pd.DataFrame()
 
 
+@st.cache_data(show_spinner=False, max_entries=24)
 def _load_geo_frame_optional(source: DataSource, relative_path: str) -> pd.DataFrame:
     try:
         return _load_project_frame(source, source.github_geo_project, relative_path)
@@ -376,6 +381,7 @@ def _load_geo_frame_optional(source: DataSource, relative_path: str) -> pd.DataF
         return pd.DataFrame()
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
 def _load_ka_dimension(source: DataSource) -> pd.DataFrame:
     frame = _load_project_frame_optional(source, source.github_ka_project, "processed/dim_ka_merchant_anz.csv")
     if frame.empty:
