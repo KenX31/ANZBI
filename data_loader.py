@@ -50,6 +50,7 @@ EXPECTED_SCHEMA = {
 EXPECTED_GEO_CONTRACT = "country-aware-1.0"
 NEW_INTAKE_ROWS_PATH = "processed/new_intake/new_intake_rows.csv"
 ACTIVATION_ROWS_PATH = "processed/activation_low_activity/activation_candidates.csv"
+SILENT_ROWS_PATH = "processed/silent_merchants/silent_merchants_rows.csv"
 NEW_INTAKE_FILTER_COLUMNS = (
     "intake_month",
     "merchant_id",
@@ -141,6 +142,54 @@ ACTIVATION_FILTER_COLUMNS = (
     "staging_business_cluster",
     "staging_postcode",
 )
+SILENT_FILTER_COLUMNS = (
+    "merchant_id",
+    "merchant_display_name",
+    "merchant_company_name",
+    "merchant_short_name",
+    "institution_id",
+    "institution_name",
+    "institution_group",
+    "country_group",
+    "merchant_country_code",
+    "state",
+    "business_state",
+    "postcode",
+    "business_city",
+    "business_suburb",
+    "geo_area",
+    "business_cluster",
+    "geo_country",
+    "geo_state",
+    "geo_city",
+    "geo_suburb",
+    "geo_postcode",
+    "nz_geo_area",
+    "nz_business_cluster",
+    "geo_reporting_level",
+    "geo_reporting_name",
+    "silence_tier",
+    "access_age_band",
+    "merchant_access_time",
+    "business_type",
+    "mcc_code",
+    "mcc",
+    "mcc_name",
+    "mcc_industry",
+    "mcc_major_industry",
+    "address",
+    "stores_address",
+    "has_address_flag",
+    "txn_count_360d",
+    "txn_amount_360d",
+    "staging_country",
+    "staging_state",
+    "staging_city",
+    "staging_suburb",
+    "staging_geo_area",
+    "staging_business_cluster",
+    "staging_postcode",
+)
 NEW_INTAKE_TEXT_COLUMNS = (
     "merchant_id",
     "merchant_company_name",
@@ -197,6 +246,19 @@ class ActivationLowActivityQuery:
         return _load_activation_rows_filtered_cached(self.source, self.data_version, criteria_key)
 
 
+@dataclass(frozen=True)
+class SilentMerchantsQuery:
+    source: DataSource
+    data_version: str
+
+    def filter_frame(self) -> pd.DataFrame:
+        return _load_silent_filter_frame_cached(self.source, self.data_version)
+
+    def rows(self, criteria: dict[str, Any]) -> pd.DataFrame:
+        criteria_key = json.dumps(criteria, ensure_ascii=False, sort_keys=True, default=str)
+        return _load_silent_rows_filtered_cached(self.source, self.data_version, criteria_key)
+
+
 def _secret_or_env(name: str, default: str = "") -> str:
     try:
         value = st.secrets.get(name)  # type: ignore[attr-defined]
@@ -249,7 +311,7 @@ def _load_page_data_cached(source: DataSource, page: str, data_version: str) -> 
     if page == "activation_low_activity":
         return _load_activation_low_activity_data(source, data_version=data_version)
     if page == "silent_merchants":
-        return _load_silent_merchants_data(source)
+        return _load_silent_merchants_data(source, data_version=data_version)
     if page == "rate_coupon_activity":
         return _load_rate_coupon_activity_data(source)
     raise DataLoadError(f"Unsupported page key: {page}")
@@ -567,16 +629,58 @@ def _load_activation_rows_filtered_cached(source: DataSource, data_version: str,
     return with_reporting_geography(frame, country_columns=["scope_country", "country_group", "merchant_country_code"])
 
 
-def _load_silent_merchants_data(source: DataSource) -> dict[str, Any]:
+def _load_silent_merchants_data(source: DataSource, *, data_version: str = "") -> dict[str, Any]:
     ka_dimension = _load_ka_dimension(source)
-    return {
-        "rows": _append_ka_segment(
-            _load_page_rows(source, "processed/silent_merchants/silent_merchants_rows.csv"),
-            ka_dimension,
-        ),
+    base = {
         "summary": _load_json(source, "processed/silent_merchants/silent_merchants_summary.json"),
         "aggregate": _load_frame(source, "processed/silent_merchants/silent_merchants_aggregate.csv"),
     }
+    if _silent_query_available(source):
+        return {**base, "query": SilentMerchantsQuery(source, data_version)}
+    return {
+        **base,
+        "rows": _append_ka_segment(
+            _load_page_rows(source, SILENT_ROWS_PATH),
+            ka_dimension,
+        ),
+    }
+
+
+def _silent_query_available(source: DataSource) -> bool:
+    try:
+        _resolve_project_parquet_path(source, source.github_project, SILENT_ROWS_PATH)
+    except DataLoadError:
+        return False
+    return True
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _load_silent_filter_frame_cached(source: DataSource, data_version: str) -> pd.DataFrame:
+    del data_version
+    frame = _query_project_parquet_frame(
+        source,
+        source.github_project,
+        SILENT_ROWS_PATH,
+        columns=list(SILENT_FILTER_COLUMNS),
+    )
+    frame = _normalize_amount_units(frame, source.amount_unit)
+    frame = _maybe_apply_geo_staging(source, frame)
+    frame = _append_ka_segment(frame, _load_ka_dimension(source))
+    return with_reporting_geography(frame, country_columns=["country_group", "merchant_country_code"])
+
+
+@st.cache_data(show_spinner=False, max_entries=48)
+def _load_silent_rows_filtered_cached(source: DataSource, data_version: str, criteria_key: str) -> pd.DataFrame:
+    del data_version
+    criteria = json.loads(criteria_key) if criteria_key else {}
+    parquet_path = _resolve_project_parquet_path(source, source.github_project, SILENT_ROWS_PATH)
+    available_columns = set(duckdb_parquet_columns(parquet_path))
+    where_sql, parameters = _in_filters_where_sql(criteria, available_columns)
+    frame = duckdb_query_parquet_path(parquet_path, where_sql=where_sql, parameters=parameters)
+    frame = _normalize_amount_units(frame, source.amount_unit)
+    frame = _maybe_apply_geo_staging(source, frame)
+    frame = _append_ka_segment(frame, _load_ka_dimension(source))
+    return with_reporting_geography(frame, country_columns=["country_group", "merchant_country_code"])
 
 
 def _load_rate_coupon_activity_data(source: DataSource) -> dict[str, Any]:

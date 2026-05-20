@@ -790,6 +790,67 @@ def test_silent_page_helpers_sort_filter_and_keep_country_aware_geo_specs() -> N
     ]
 
 
+def test_silent_query_rows_match_pandas_filters(tmp_path: Path) -> None:
+    root = tmp_path / "anz-bi-platform"
+    page_root = root / "processed" / "silent_merchants"
+    page_root.mkdir(parents=True)
+    rows = pd.DataFrame(
+        [
+            {
+                "merchant_id": "s1",
+                "merchant_display_name": "Silent Cafe",
+                "institution_name": "PSP A",
+                "country_group": "NZ",
+                "merchant_country_code": "554",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "silence_tier": "initial_silent",
+                "access_age_band": "access_180_359d",
+                "business_type": "OFFLINE",
+                "mcc_code": "5812",
+                "has_address_flag": 1,
+            },
+            {
+                "merchant_id": "s2",
+                "merchant_display_name": "Deep Silent",
+                "institution_name": "PSP B",
+                "country_group": "NZ",
+                "merchant_country_code": "554",
+                "geo_country": "NZ",
+                "geo_city": "Wellington",
+                "silence_tier": "deep_silent",
+                "access_age_band": "access_gte_360d",
+                "business_type": "BOTH",
+                "mcc_code": "5411",
+                "has_address_flag": 0,
+            },
+            {
+                "merchant_id": "s3",
+                "merchant_display_name": "AU Silent",
+                "institution_name": "PSP A",
+                "country_group": "AU",
+                "merchant_country_code": "036",
+                "geo_country": "AU",
+                "geo_city": "Sydney",
+                "silence_tier": "initial_silent",
+                "access_age_band": "access_180_359d",
+                "business_type": "OFFLINE",
+                "mcc_code": "5812",
+                "has_address_flag": 1,
+            },
+        ]
+    )
+    rows.to_parquet(page_root / "silent_merchants_rows.parquet", index=False)
+    source = data_loader.DataSource(backend="local", local_root=root, amount_unit="major")
+    query = data_loader.SilentMerchantsQuery(source, "test-version")
+
+    filtered = query.rows({"in_filters": {"geo_country": ["NZ"], "silence_tier": ["initial_silent"]}})
+    expected = apply_in_filter(with_reporting_geography(rows, country_columns=["country_group", "merchant_country_code"]), "geo_country", ["NZ"])
+    expected = apply_in_filter(expected, "silence_tier", ["initial_silent"])
+
+    assert filtered["merchant_id"].tolist() == expected["merchant_id"].tolist() == ["s1"]
+
+
 def test_amount_columns_are_scaled_from_minor_units() -> None:
     rows = pd.DataFrame(
         [
