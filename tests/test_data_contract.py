@@ -913,15 +913,94 @@ def test_new_intake_month_options_recover_legacy_october_label() -> None:
 def test_new_intake_default_scope_excludes_online_and_zhenxing() -> None:
     rows = pd.DataFrame(
         {
-            "merchant_id": ["offline", "online", "zhenxing"],
-            "channel_type": ["OFFLINE", "ONLINE", "BOTH"],
-            "is_zhenxing": ["0", "0", "1"],
+            "merchant_id": ["offline", "online", "zhenxing", "numeric_zhenxing"],
+            "channel_type": ["OFFLINE", "ONLINE", "BOTH", "OFFLINE"],
+            "is_zhenxing": ["0", "0", "1", 1.0],
         }
     )
 
-    scoped = _apply_zhenxing_scope(_apply_online_scope(rows, ONLINE_SCOPE_EXCLUDE), "排除圳兴")
+    scoped = _apply_zhenxing_scope(_apply_online_scope(rows, ONLINE_SCOPE_EXCLUDE), "\u6392\u9664\u5733\u5174")
 
     assert scoped["merchant_id"].tolist() == ["offline"]
+
+
+def test_new_intake_query_rows_match_pandas_default_scope(tmp_path: Path) -> None:
+    root = tmp_path / "anz-bi-platform"
+    page_root = root / "processed" / "new_intake"
+    page_root.mkdir(parents=True)
+    rows = pd.DataFrame(
+        [
+            {
+                "merchant_id": "m1",
+                "intake_month": "2025.10",
+                "channel_type": "OFFLINE",
+                "is_zhenxing": 0,
+                "analysis_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "txn_amount_30d": 100,
+            },
+            {
+                "merchant_id": "m2",
+                "intake_month": "2025.11",
+                "channel_type": "ONLINE",
+                "is_zhenxing": 0,
+                "analysis_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "txn_amount_30d": 200,
+            },
+            {
+                "merchant_id": "m3",
+                "intake_month": "2025.12",
+                "channel_type": "OFFLINE",
+                "is_zhenxing": 1.0,
+                "analysis_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "txn_amount_30d": 300,
+            },
+            {
+                "merchant_id": "m4",
+                "intake_month": "2026.03",
+                "channel_type": "OFFLINE",
+                "is_zhenxing": 0,
+                "analysis_country": "AU",
+                "geo_country": "AU",
+                "geo_city": "Sydney",
+                "txn_amount_30d": 400,
+            },
+            {
+                "merchant_id": "m5",
+                "intake_month": "2025.09",
+                "channel_type": "OFFLINE",
+                "is_zhenxing": 0,
+                "analysis_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "txn_amount_30d": 500,
+            },
+        ]
+    )
+    rows.to_parquet(page_root / "new_intake_rows.parquet", index=False)
+    source = data_loader.DataSource(backend="local", local_root=root, amount_unit="major")
+    query = data_loader.NewIntakeQuery(source, "test-version")
+
+    filtered = query.rows(
+        {
+            "in_filters": {},
+            "month_range": ["2025.10", "2026.03"],
+            "online_scope": "exclude",
+            "zhenxing_scope": "exclude",
+        }
+    )
+    expected = _apply_online_scope(
+        _apply_zhenxing_scope(_filter_month_range(rows, "2025.10", "2026.03"), "\u6392\u9664\u5733\u5174"),
+        ONLINE_SCOPE_EXCLUDE,
+    )
+
+    assert filtered["merchant_id"].tolist() == expected["merchant_id"].tolist() == ["m1", "m4"]
+    assert filtered["txn_amount_30d"].tolist() == [100, 400]
 
 
 def test_activation_monitoring_uses_q1_frequency_decline_bands() -> None:

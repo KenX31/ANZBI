@@ -95,6 +95,11 @@ def duckdb_query_parquet_path(
     return duckdb_connection().execute(sql, query_parameters).df()
 
 
+def duckdb_parquet_columns(path: Path) -> list[str]:
+    rows = duckdb_connection().execute("describe select * from read_parquet(?)", [str(path)]).fetchall()
+    return [str(row[0]) for row in rows]
+
+
 def duckdb_filter_frame(
     frame: pd.DataFrame,
     *,
