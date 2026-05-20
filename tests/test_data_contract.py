@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 from datetime import date
+from io import BytesIO
 import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,12 +33,15 @@ import data_loader
 from data_loader import (
     DataLoadError,
     _append_ka_segment,
+    _github_response_bytes,
+    _load_frame,
     _normalize_amount_units,
     _read_csv_text,
     validate_page_dataset,
     validate_project,
     validate_project_metadata,
 )
+from data_io import duckdb_filter_frame, read_table_bytes
 from exports import (
     activation_internal_export,
     activation_provider_export,
@@ -750,6 +756,80 @@ def test_amount_columns_are_scaled_from_minor_units() -> None:
 def test_csv_reader_preserves_intake_month_labels() -> None:
     rows = _read_csv_text("intake_month,txn_amount_30d\n2025.10,100\n")
     assert rows.loc[0, "intake_month"] == "2025.10"
+
+
+def test_local_table_loader_prefers_parquet_over_csv(tmp_path: Path) -> None:
+    root = tmp_path / "anz-bi-platform"
+    page_root = root / "processed" / "new_intake"
+    page_root.mkdir(parents=True)
+    pd.DataFrame([{"merchant_id": "csv", "intake_month": "2025.09"}]).to_csv(
+        page_root / "new_intake_rows.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    pd.DataFrame([{"merchant_id": "parquet", "intake_month": "2025.10"}]).to_parquet(
+        page_root / "new_intake_rows.parquet",
+        index=False,
+    )
+    source = data_loader.DataSource(backend="local", local_root=root, amount_unit="major")
+
+    rows = _load_frame(source, "processed/new_intake/new_intake_rows.csv")
+
+    assert rows["merchant_id"].tolist() == ["parquet"]
+    assert rows.loc[0, "intake_month"] == "2025.10"
+
+
+def test_local_table_loader_falls_back_to_csv(tmp_path: Path) -> None:
+    root = tmp_path / "anz-bi-platform"
+    page_root = root / "processed" / "new_intake"
+    page_root.mkdir(parents=True)
+    pd.DataFrame([{"merchant_id": "csv", "intake_month": "2025.10"}]).to_csv(
+        page_root / "new_intake_rows.csv",
+        index=False,
+        encoding="utf-8-sig",
+    )
+    source = data_loader.DataSource(backend="local", local_root=root, amount_unit="major")
+
+    rows = _load_frame(source, "processed/new_intake/new_intake_rows.csv")
+
+    assert rows["merchant_id"].tolist() == ["csv"]
+    assert rows.loc[0, "intake_month"] == "2025.10"
+
+
+def test_github_binary_response_can_read_parquet_bytes() -> None:
+    buffer = BytesIO()
+    pd.DataFrame([{"stock_id": "stv2-1", "country_group": "NZ"}]).to_parquet(buffer, index=False)
+
+    class FakeResponse:
+        headers = {"content-type": "application/json"}
+
+        @staticmethod
+        def json() -> dict[str, str]:
+            return {"content": base64.b64encode(buffer.getvalue()).decode("ascii")}
+
+    source = data_loader.DataSource(backend="github_private", github_token="token")
+    payload = _github_response_bytes(source, FakeResponse(), "processed/rate_coupon_activity/rate_coupon_monthly.parquet")
+
+    rows = read_table_bytes(payload, relative_path="processed/rate_coupon_activity/rate_coupon_monthly.parquet")
+
+    assert rows["stock_id"].tolist() == ["stv2-1"]
+    assert rows["country_group"].tolist() == ["NZ"]
+
+
+def test_duckdb_filter_frame_matches_pandas_filter() -> None:
+    pytest.importorskip("duckdb")
+    rows = pd.DataFrame(
+        [
+            {"merchant_id": "nz-1", "country_group": "NZ", "txn_count_30d": 3},
+            {"merchant_id": "au-1", "country_group": "AU", "txn_count_30d": 5},
+            {"merchant_id": "nz-2", "country_group": "NZ", "txn_count_30d": 7},
+        ]
+    )
+
+    filtered = duckdb_filter_frame(rows, where_sql='"country_group" = ?', parameters=("NZ",))
+
+    assert filtered["merchant_id"].tolist() == ["nz-1", "nz-2"]
+    assert filtered["txn_count_30d"].tolist() == [3, 7]
 
 
 def test_new_intake_default_month_range_uses_latest_six_calendar_months() -> None:

@@ -60,13 +60,14 @@ def test_rate_coupon_materializer_writes_page_slice(tmp_path: Path) -> None:
     )
 
     page_root = output_root / "processed" / PAGE_ID
-    monthly = pd.read_csv(page_root / "rate_coupon_monthly.csv", dtype=str, keep_default_na=False)
-    metadata = pd.read_csv(page_root / "rate_coupon_stock_metadata.csv", dtype=str, keep_default_na=False)
+    monthly = pd.read_parquet(page_root / "rate_coupon_monthly.parquet").astype(str)
+    metadata = pd.read_parquet(page_root / "rate_coupon_stock_metadata.parquet").astype(str)
     summary = json.loads((page_root / "rate_coupon_summary.json").read_text(encoding="utf-8-sig"))
     manifest = json.loads((output_root / "manifest.json").read_text(encoding="utf-8-sig"))
 
     assert result["page_id"] == PAGE_ID
     assert manifest["page_datasets"][PAGE_ID]["schema_version"] == SCHEMA_VERSION
+    assert manifest["page_datasets"][PAGE_ID]["storage_format"] == "parquet"
     assert manifest["page_datasets"]["new_intake"]["schema_version"] == "1.0"
     assert manifest["source"]["rate_coupon_activity_monthly"] == str(source)
     assert monthly["stock_id"].tolist() == [
@@ -78,6 +79,7 @@ def test_rate_coupon_materializer_writes_page_slice(tmp_path: Path) -> None:
     assert summary["latest_month"] == "2026-01"
     assert summary["totals"]["redeemed_coupon_code_count_trade"] == 19.0
     assert "raw order" in manifest["guardrails"][-1]
+    assert result["files"]["monthly"].endswith(".parquet")
 
 
 def test_rate_coupon_materializer_normalizes_internal_contract(tmp_path: Path) -> None:

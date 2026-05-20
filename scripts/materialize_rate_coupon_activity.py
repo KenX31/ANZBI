@@ -11,6 +11,7 @@ import pandas as pd
 
 PAGE_ID = "rate_coupon_activity"
 SCHEMA_VERSION = "1.0"
+STORAGE_FORMAT = "parquet"
 DEFAULT_VERSION = "2026.05.19-rate-coupon-v1"
 DEFAULT_SOURCE_MONTHLY = Path(
     r"D:\Tencent\Data analysis\2026.5.15_NZ_rate_coupon_stock_monthly\data\raw\rate_coupon_stock_from_start_to_202604_monthly.csv"
@@ -158,8 +159,8 @@ def write_rate_coupon_activity_slice(
 
     page_root = output_root / "processed" / PAGE_ID
     page_root.mkdir(parents=True, exist_ok=True)
-    monthly.to_csv(page_root / "rate_coupon_monthly.csv", index=False, encoding="utf-8-sig")
-    metadata.to_csv(page_root / "rate_coupon_stock_metadata.csv", index=False, encoding="utf-8-sig")
+    monthly.to_parquet(page_root / "rate_coupon_monthly.parquet", index=False)
+    metadata.to_parquet(page_root / "rate_coupon_stock_metadata.parquet", index=False)
     (page_root / "rate_coupon_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -168,19 +169,21 @@ def write_rate_coupon_activity_slice(
     manifest = _load_or_create_manifest(output_root)
     manifest["version"] = version
     manifest["generated_at"] = generated_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    manifest.setdefault("contract", {})["storage_format"] = STORAGE_FORMAT
     manifest.setdefault("source", {})
     manifest["source"]["rate_coupon_activity_monthly"] = str(source_monthly)
     manifest.setdefault("page_datasets", {})
     manifest["page_datasets"][PAGE_ID] = {
         "schema_version": SCHEMA_VERSION,
+        "storage_format": STORAGE_FORMAT,
         "page_root": f"processed/{PAGE_ID}/",
         "privacy_level": "aggregate_monthly_activity",
         "source_period": summary["source_period"],
         "row_count": int(len(monthly)),
         "stock_count": int(metadata["stock_id"].nunique()) if not metadata.empty else 0,
         "files": {
-            "monthly": f"processed/{PAGE_ID}/rate_coupon_monthly.csv",
-            "stock_metadata": f"processed/{PAGE_ID}/rate_coupon_stock_metadata.csv",
+            "monthly": f"processed/{PAGE_ID}/rate_coupon_monthly.parquet",
+            "stock_metadata": f"processed/{PAGE_ID}/rate_coupon_stock_metadata.parquet",
             "summary": f"processed/{PAGE_ID}/rate_coupon_summary.json",
         },
     }
@@ -354,6 +357,7 @@ def _load_or_create_manifest(output_root: Path) -> dict[str, Any]:
         "project_id": "anz-bi-platform",
         "contract": {
             "dataset_layout": "page_scoped",
+            "storage_format": STORAGE_FORMAT,
             "page_root": "processed/<page_id>/",
             "shared_root": "processed/shared_dimensions/",
             "geo_project": "anz-geography",

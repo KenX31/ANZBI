@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
+from data_io import read_local_table, read_table_bytes, table_path_candidates
 from geo_matching import MERCHANT_LOCATION_ALIAS_FILENAME, StreamlitGeoMatcher, append_staging_geo_columns
 
 
@@ -154,8 +155,10 @@ def _page_data_version(manifest: dict[str, Any], ka_manifest: dict[str, Any], pa
             manifest.get("version"),
             page,
             page_info.get("schema_version"),
+            page_info.get("storage_format"),
             page_info.get("source_period"),
             page_info.get("row_count"),
+            page_info.get("files"),
             ka_version,
         )
     )
@@ -249,6 +252,7 @@ def validate_page_dataset(
         )
 
 
+@st.cache_data(show_spinner=False, max_entries=96)
 def _load_json(source: DataSource, relative_path: str) -> dict[str, Any]:
     text = _read_text(source, relative_path)
     try:
@@ -261,13 +265,41 @@ def _load_json(source: DataSource, relative_path: str) -> dict[str, Any]:
 
 
 def _load_frame(source: DataSource, relative_path: str) -> pd.DataFrame:
+    frame = _load_project_frame(source, source.github_project, relative_path)
+    return _normalize_amount_units(frame, source.amount_unit)
+
+
+def _load_project_frame(source: DataSource, project: str, relative_path: str) -> pd.DataFrame:
     if source.backend == "local":
-        path = _local_path(source, relative_path)
-        if not path.exists():
-            raise DataLoadError(f"Missing local data file: {path}")
-        return _normalize_amount_units(_read_csv_path(path), source.amount_unit)
-    text = _read_text(source, relative_path)
-    return _normalize_amount_units(_read_csv_text(text), source.amount_unit)
+        path = _local_project_path(source, project, relative_path)
+        try:
+            return read_local_table(path, csv_dtypes=CSV_DTYPES)
+        except FileNotFoundError:
+            candidates = ", ".join(table_path_candidates(relative_path))
+            raise DataLoadError(f"Missing local data file for {path}; checked {candidates}") from None
+    if source.backend == "github_private":
+        return _load_github_project_frame_cached(source, project, relative_path)
+    raise DataLoadError(f"Unsupported DATA_BACKEND: {source.backend}")
+
+
+@st.cache_data(show_spinner=False, max_entries=128)
+def _load_github_project_frame_cached(source: DataSource, project: str, relative_path: str) -> pd.DataFrame:
+    last_missing: DataLoadError | None = None
+    for candidate in table_path_candidates(relative_path):
+        try:
+            payload = _read_github_project_bytes(source, project, candidate)
+        except DataLoadError as exc:
+            if _is_not_found(exc):
+                last_missing = exc
+                continue
+            raise
+        try:
+            return read_table_bytes(payload, relative_path=candidate, csv_dtypes=CSV_DTYPES)
+        except Exception as exc:
+            raise DataLoadError(f"Could not read table {candidate}: {exc}") from exc
+    if last_missing is not None:
+        raise last_missing
+    raise DataLoadError(f"Private data file not found on GitHub: {relative_path}")
 
 
 def _load_page_rows(source: DataSource, relative_path: str) -> pd.DataFrame:
@@ -339,12 +371,9 @@ def _load_frame_optional(source: DataSource, relative_path: str) -> pd.DataFrame
 
 def _load_geo_frame_optional(source: DataSource, relative_path: str) -> pd.DataFrame:
     try:
-        text = _read_github_project_text(source, source.github_geo_project, relative_path)
+        return _load_project_frame(source, source.github_geo_project, relative_path)
     except DataLoadError:
         return pd.DataFrame()
-    from io import StringIO
-
-    return pd.read_csv(StringIO(text))
 
 
 def _load_ka_dimension(source: DataSource) -> pd.DataFrame:
@@ -436,10 +465,9 @@ def _load_project_json_optional(source: DataSource, project: str, relative_path:
 
 def _load_project_frame_optional(source: DataSource, project: str, relative_path: str) -> pd.DataFrame:
     try:
-        text = _read_project_text(source, project, relative_path)
+        return _load_project_frame(source, project, relative_path)
     except DataLoadError:
         return pd.DataFrame()
-    return _read_csv_text(text)
 
 
 def _read_csv_path(path: Path) -> pd.DataFrame:
@@ -484,6 +512,17 @@ def _read_project_text(source: DataSource, project: str, relative_path: str) -> 
     raise DataLoadError(f"Unsupported DATA_BACKEND: {source.backend}")
 
 
+def _read_project_bytes(source: DataSource, project: str, relative_path: str) -> bytes:
+    if source.backend == "local":
+        path = _local_project_path(source, project, relative_path)
+        if not path.exists():
+            raise DataLoadError(f"Missing local data file: {path}")
+        return path.read_bytes()
+    if source.backend == "github_private":
+        return _read_github_project_bytes(source, project, relative_path)
+    raise DataLoadError(f"Unsupported DATA_BACKEND: {source.backend}")
+
+
 def _local_path(source: DataSource, relative_path: str) -> Path:
     return _local_project_path(source, source.github_project, relative_path)
 
@@ -501,6 +540,11 @@ def _local_project_path(source: DataSource, project: str, relative_path: str) ->
 
 
 def _read_github_project_text(source: DataSource, project: str, relative_path: str) -> str:
+    return _read_github_project_bytes(source, project, relative_path).decode("utf-8-sig")
+
+
+@st.cache_data(show_spinner=False, max_entries=256)
+def _read_github_project_bytes(source: DataSource, project: str, relative_path: str) -> bytes:
     if not source.github_token:
         raise DataLoadError(
             "DATA_GITHUB_TOKEN is required when DATA_BACKEND=github_private. "
@@ -517,7 +561,7 @@ def _read_github_project_text(source: DataSource, project: str, relative_path: s
     }
     response = requests.get(url, headers=headers, params={"ref": source.github_ref}, timeout=30)
     if response.ok:
-        return _github_response_text(source, response, relative_path)
+        return _github_response_bytes(source, response, relative_path)
 
     status = response.status_code
     if status in {401, 403}:
@@ -535,15 +579,19 @@ def _read_github_project_text(source: DataSource, project: str, relative_path: s
 
 
 def _github_response_text(source: DataSource, response: requests.Response, relative_path: str) -> str:
+    return _github_response_bytes(source, response, relative_path).decode("utf-8-sig")
+
+
+def _github_response_bytes(source: DataSource, response: requests.Response, relative_path: str) -> bytes:
     content_type = response.headers.get("content-type", "")
     if "application/json" not in content_type:
-        return response.text
+        return response.content
 
     payload = response.json()
     if isinstance(payload, dict):
         encoded = str(payload.get("content") or "").strip()
         if encoded:
-            return base64.b64decode(encoded).decode("utf-8-sig")
+            return base64.b64decode(encoded)
         download_url = payload.get("download_url")
         if download_url:
             headers = {
@@ -552,8 +600,12 @@ def _github_response_text(source: DataSource, response: requests.Response, relat
             }
             raw = requests.get(str(download_url), headers=headers, timeout=30)
             if raw.ok:
-                return raw.text
+                return raw.content
             raise DataLoadError(
                 f"GitHub raw download failed for {relative_path}: HTTP {raw.status_code}"
             )
     raise DataLoadError(f"GitHub returned an unexpected response for {relative_path}.")
+
+
+def _is_not_found(exc: DataLoadError) -> bool:
+    return "not found" in str(exc).casefold() or "missing local data file" in str(exc).casefold()

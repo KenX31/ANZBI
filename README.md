@@ -27,6 +27,9 @@ projects/anz-bi-platform/
     shared_dimensions/
 ```
 
+Runtime table storage is Parquet-first. The app still keeps CSV fallback support
+so deployed `main` data and older local packages remain readable during migration.
+
 ## Local Run
 
 On this workstation, the app automatically falls back to:
@@ -40,6 +43,18 @@ Run:
 ```powershell
 streamlit run app.py
 ```
+
+For Codex/local smoke tests on Windows, prefer the non-blocking preview helper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start_local_preview.ps1 -Port 8527 -StopAfterSmoke
+```
+
+The helper starts Streamlit through a direct child process instead of
+`Start-Process`, avoiding the Windows `Path`/`PATH` environment-key collision
+seen on this workstation. It polls `/_stcore/health` and then returns the
+preview URL instead of waiting forever for the Streamlit server to exit. Omit
+`-StopAfterSmoke` when you want to keep the local preview open.
 
 To override the local data path:
 
@@ -188,6 +203,10 @@ Streamlit Secrets; never commit it to this code repository.
 divides amount fields by `100` at load time for KPI tables, charts, and exports.
 If a future data refresh writes amounts already in major currency units, set this
 secret to `major` before deploying that contract.
+
+Parquet tables are read through a small PyArrow IO layer. Local Parquet reads use
+DuckDB where available, and GitHub private data is downloaded as bytes before the
+table is materialized for Streamlit display and CSV exports.
 
 ## Build Private Data Package
 
