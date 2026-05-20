@@ -1092,6 +1092,61 @@ def test_activation_activity_windows_are_q1_frequency_in_calendar_order() -> Non
     assert windows["active_merchant_count"].tolist() == [2, 2, 2]
 
 
+def test_activation_query_rows_match_pandas_filters(tmp_path: Path) -> None:
+    root = tmp_path / "anz-bi-platform"
+    page_root = root / "processed" / "activation_low_activity"
+    page_root.mkdir(parents=True)
+    rows = pd.DataFrame(
+        [
+            {
+                "merchant_id": "nz-1",
+                "merchant_name": "NZ Cafe",
+                "institution_name": "PSP A",
+                "scope_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Auckland",
+                "mcc_major_industry": "餐饮类",
+                "trade_cnt_prev_3m": 10,
+                "trade_cnt_prev_2m": 10,
+                "trade_cnt_prev_1m": 0,
+            },
+            {
+                "merchant_id": "nz-2",
+                "merchant_name": "NZ Retail",
+                "institution_name": "PSP B",
+                "scope_country": "NZ",
+                "geo_country": "NZ",
+                "geo_city": "Wellington",
+                "mcc_major_industry": "零售类",
+                "trade_cnt_prev_3m": 8,
+                "trade_cnt_prev_2m": 8,
+                "trade_cnt_prev_1m": 7,
+            },
+            {
+                "merchant_id": "au-1",
+                "merchant_name": "AU Cafe",
+                "institution_name": "PSP A",
+                "scope_country": "AU",
+                "geo_country": "AU",
+                "geo_city": "Sydney",
+                "mcc_major_industry": "餐饮类",
+                "trade_cnt_prev_3m": 9,
+                "trade_cnt_prev_2m": 9,
+                "trade_cnt_prev_1m": 2,
+            },
+        ]
+    )
+    rows.to_parquet(page_root / "activation_candidates.parquet", index=False)
+    source = data_loader.DataSource(backend="local", local_root=root, amount_unit="major")
+    query = data_loader.ActivationLowActivityQuery(source, "test-version")
+
+    filtered = query.rows({"in_filters": {"geo_country": ["NZ"], "mcc_major_industry": ["餐饮类"]}})
+    expected = apply_in_filter(with_reporting_geography(rows, country_columns=["scope_country"]), "geo_country", ["NZ"])
+    expected = apply_in_filter(expected, "mcc_major_industry", ["餐饮类"])
+
+    assert filtered["merchant_id"].tolist() == expected["merchant_id"].tolist() == ["nz-1"]
+
+
 def test_activation_combo_chart_uses_bar_and_line_axes() -> None:
     rows = pd.DataFrame(
         [

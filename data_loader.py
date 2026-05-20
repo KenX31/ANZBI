@@ -49,6 +49,7 @@ EXPECTED_SCHEMA = {
 }
 EXPECTED_GEO_CONTRACT = "country-aware-1.0"
 NEW_INTAKE_ROWS_PATH = "processed/new_intake/new_intake_rows.csv"
+ACTIVATION_ROWS_PATH = "processed/activation_low_activity/activation_candidates.csv"
 NEW_INTAKE_FILTER_COLUMNS = (
     "intake_month",
     "merchant_id",
@@ -82,6 +83,56 @@ NEW_INTAKE_FILTER_COLUMNS = (
     "business_suburb",
     "geo_area",
     "business_cluster",
+    "staging_country",
+    "staging_state",
+    "staging_city",
+    "staging_suburb",
+    "staging_geo_area",
+    "staging_business_cluster",
+    "staging_postcode",
+)
+ACTIVATION_FILTER_COLUMNS = (
+    "merchant_id",
+    "merchant_name",
+    "merchant_short_name",
+    "institution_id",
+    "institution_name",
+    "institution_group",
+    "scope_country",
+    "country_group",
+    "merchant_country_code",
+    "address",
+    "normalized_address",
+    "state",
+    "business_state",
+    "postcode",
+    "au_service_area",
+    "service_area",
+    "business_city",
+    "business_suburb",
+    "geo_area",
+    "business_cluster",
+    "mcc",
+    "mcc_name",
+    "mcc_industry",
+    "mcc_major_industry",
+    "trade_cnt_prev_3m",
+    "trade_cnt_prev_2m",
+    "trade_cnt_prev_1m",
+    "eligible_low_activity_flag",
+    "decay_band",
+    "activity_decay_score",
+    "candidate_rank",
+    "priority_label",
+    "geo_country",
+    "geo_state",
+    "geo_city",
+    "geo_suburb",
+    "geo_postcode",
+    "nz_geo_area",
+    "nz_business_cluster",
+    "geo_reporting_level",
+    "geo_reporting_name",
     "staging_country",
     "staging_state",
     "staging_city",
@@ -131,6 +182,19 @@ class NewIntakeQuery:
     def rows(self, criteria: dict[str, Any]) -> pd.DataFrame:
         criteria_key = json.dumps(criteria, ensure_ascii=False, sort_keys=True, default=str)
         return _load_new_intake_rows_filtered_cached(self.source, self.data_version, criteria_key)
+
+
+@dataclass(frozen=True)
+class ActivationLowActivityQuery:
+    source: DataSource
+    data_version: str
+
+    def filter_frame(self) -> pd.DataFrame:
+        return _load_activation_filter_frame_cached(self.source, self.data_version)
+
+    def rows(self, criteria: dict[str, Any]) -> pd.DataFrame:
+        criteria_key = json.dumps(criteria, ensure_ascii=False, sort_keys=True, default=str)
+        return _load_activation_rows_filtered_cached(self.source, self.data_version, criteria_key)
 
 
 def _secret_or_env(name: str, default: str = "") -> str:
@@ -183,7 +247,7 @@ def _load_page_data_cached(source: DataSource, page: str, data_version: str) -> 
     if page == "new_intake":
         return _load_new_intake_data(source, data_version=data_version)
     if page == "activation_low_activity":
-        return _load_activation_low_activity_data(source)
+        return _load_activation_low_activity_data(source, data_version=data_version)
     if page == "silent_merchants":
         return _load_silent_merchants_data(source)
     if page == "rate_coupon_activity":
@@ -358,16 +422,10 @@ def _new_intake_where_sql(criteria: dict[str, Any], available_columns: set[str])
         clauses.append(f"{_new_intake_month_key_sql('intake_month')} between ? and ?")
         parameters.extend([start_key, end_key])
 
-    in_filters = criteria.get("in_filters") if isinstance(criteria.get("in_filters"), dict) else {}
-    for column, selected in in_filters.items():
-        if column not in available_columns or not isinstance(selected, list):
-            continue
-        values = [str(value) for value in selected if str(value)]
-        if not values:
-            continue
-        placeholders = ", ".join("?" for _ in values)
-        clauses.append(f"cast({_quote_identifier(column)} as varchar) in ({placeholders})")
-        parameters.extend(values)
+    in_sql, in_parameters = _in_filters_where_sql(criteria, available_columns)
+    if in_sql:
+        clauses.append(in_sql)
+        parameters.extend(in_parameters)
 
     zhenxing_scope = str(criteria.get("zhenxing_scope") or "all")
     if "is_zhenxing" in available_columns:
@@ -390,6 +448,22 @@ def _new_intake_where_sql(criteria: dict[str, Any], available_columns: set[str])
         elif active_status == "inactive":
             clauses.append("cast(\"active_30d_flag\" as varchar) = '0'")
 
+    return " and ".join(clauses), tuple(parameters)
+
+
+def _in_filters_where_sql(criteria: dict[str, Any], available_columns: set[str]) -> tuple[str, tuple[Any, ...]]:
+    clauses: list[str] = []
+    parameters: list[Any] = []
+    in_filters = criteria.get("in_filters") if isinstance(criteria.get("in_filters"), dict) else {}
+    for column, selected in in_filters.items():
+        if column not in available_columns or not isinstance(selected, list):
+            continue
+        values = [str(value) for value in selected if str(value)]
+        if not values:
+            continue
+        placeholders = ", ".join("?" for _ in values)
+        clauses.append(f"cast({_quote_identifier(column)} as varchar) in ({placeholders})")
+        parameters.extend(values)
     return " and ".join(clauses), tuple(parameters)
 
 
@@ -439,16 +513,58 @@ def _new_intake_month_key_sql(column: str) -> str:
     return f"coalesce(({year_sql} * 100 + {month_sql}), 999999)"
 
 
-def _load_activation_low_activity_data(source: DataSource) -> dict[str, Any]:
+def _load_activation_low_activity_data(source: DataSource, *, data_version: str = "") -> dict[str, Any]:
     ka_dimension = _load_ka_dimension(source)
-    return {
-        "rows": _append_ka_segment(
-            _load_page_rows(source, "processed/activation_low_activity/activation_candidates.csv"),
-            ka_dimension,
-        ),
+    base = {
         "summary": _load_json(source, "processed/activation_low_activity/low_activity_bi_summary.json"),
         "area_rollup": _load_frame(source, "processed/activation_low_activity/area_low_activity_rollup.csv"),
     }
+    if _activation_query_available(source):
+        return {**base, "query": ActivationLowActivityQuery(source, data_version)}
+    return {
+        **base,
+        "rows": _append_ka_segment(
+            _load_page_rows(source, ACTIVATION_ROWS_PATH),
+            ka_dimension,
+        ),
+    }
+
+
+def _activation_query_available(source: DataSource) -> bool:
+    try:
+        _resolve_project_parquet_path(source, source.github_project, ACTIVATION_ROWS_PATH)
+    except DataLoadError:
+        return False
+    return True
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _load_activation_filter_frame_cached(source: DataSource, data_version: str) -> pd.DataFrame:
+    del data_version
+    frame = _query_project_parquet_frame(
+        source,
+        source.github_project,
+        ACTIVATION_ROWS_PATH,
+        columns=list(ACTIVATION_FILTER_COLUMNS),
+    )
+    frame = _normalize_amount_units(frame, source.amount_unit)
+    frame = _maybe_apply_geo_staging(source, frame)
+    frame = _append_ka_segment(frame, _load_ka_dimension(source))
+    return with_reporting_geography(frame, country_columns=["scope_country", "country_group", "merchant_country_code"])
+
+
+@st.cache_data(show_spinner=False, max_entries=48)
+def _load_activation_rows_filtered_cached(source: DataSource, data_version: str, criteria_key: str) -> pd.DataFrame:
+    del data_version
+    criteria = json.loads(criteria_key) if criteria_key else {}
+    parquet_path = _resolve_project_parquet_path(source, source.github_project, ACTIVATION_ROWS_PATH)
+    available_columns = set(duckdb_parquet_columns(parquet_path))
+    where_sql, parameters = _in_filters_where_sql(criteria, available_columns)
+    frame = duckdb_query_parquet_path(parquet_path, where_sql=where_sql, parameters=parameters)
+    frame = _normalize_amount_units(frame, source.amount_unit)
+    frame = _maybe_apply_geo_staging(source, frame)
+    frame = _append_ka_segment(frame, _load_ka_dimension(source))
+    return with_reporting_geography(frame, country_columns=["scope_country", "country_group", "merchant_country_code"])
 
 
 def _load_silent_merchants_data(source: DataSource) -> dict[str, Any]:
